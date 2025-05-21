@@ -20,13 +20,13 @@ app = Flask(__name__)
 console = Console()
 
 def send_to_mistral(user_message):
-    url = f"https://api.mistral.ai/v1/agents/{MISTRAL_AGENT_ID}/completions"
+    url = "https://api.mistral.ai/v1/agents/completions"
     headers = {
         "Authorization": f"Bearer {MISTRAL_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "mistral-large-2.1",
+        "agent_id": MISTRAL_AGENT_ID,
         "temperature": 0.43,
         "messages": [
             {"role": "system", "content": "Você é Geovana, agente virtual da G4 Telecom."},
