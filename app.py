@@ -56,11 +56,15 @@ def webhook():
     data = request.json
     console.rule("[bold green]Webhook Recebido")
     rprint(data)
-    phone = data.get("from")
-    user_message = data.get("body")
+
+    # Extrai o telefone e a mensagem do payload real
+    phone = data.get("jid")
+    user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
+
     if not phone or not user_message:
         console.log(f"[red]Payload inesperado: {data}")
         return jsonify({"error": "Payload inesperado", "payload": data}), 400
+
     # 1. Envia mensagem para o agente Mistral
     resposta = send_to_mistral(user_message)
     # 2. Responde no WhatsApp via MegaAPI
