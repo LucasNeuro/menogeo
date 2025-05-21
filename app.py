@@ -28,7 +28,6 @@ def send_to_mistral(user_message):
     payload = {
         "agent_id": MISTRAL_AGENT_ID,
         "messages": [
-            {"role": "system", "content": "Você é Geovana, agente virtual da G4 Telecom."},
             {"role": "user", "content": user_message}
         ],
         "response_format": {"type": "text"}
