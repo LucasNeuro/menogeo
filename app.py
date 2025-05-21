@@ -76,8 +76,12 @@ def webhook():
     phone = data.get("jid")
     if phone:
         # Remove o sufixo e mantém só os dígitos
+        phone_original = phone
         phone = phone.split("@")[0]
         phone = "".join(filter(str.isdigit, phone))
+        console.log(f"[yellow]Telefone original: {phone_original} | Telefone extraído: {phone}")
+    else:
+        console.log(f"[red]Campo 'jid' não encontrado no payload!")
     user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
 
     if not phone or not user_message:
@@ -88,6 +92,7 @@ def webhook():
     resposta = send_to_mistral(user_message)
     console.log(f"[green]Resposta do agente: {resposta}")
     # 2. Responde no WhatsApp via MegaAPI
+    console.log(f"[cyan]Enviando para MegaAPI: to={phone}, text={resposta}")
     send_whatsapp_message(phone, resposta)
     return jsonify({"status": "ok"})
 
