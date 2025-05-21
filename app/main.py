@@ -7,7 +7,7 @@ app = FastAPI()
 def health_check():
     return {"status": "ok"}
 
-@app.post("/webhook/megaapi")
+@app.post("/webhook/whatsapp")
 async def megaapi_webhook(request: Request):
     payload = await request.json()
     # Validação básica do payload
