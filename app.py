@@ -17,7 +17,13 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 MISTRAL_AGENT_ID = os.getenv("MISTRAL_AGENT_ID")
 
 app = Flask(__name__)
-console = Console(color_system="truecolor" , theme="monokai" , style="bold", emoji=True)
+console = Console (
+    
+    color_system="truecolor" , 
+    theme="monokai" , 
+    style="bold", 
+    emoji=True
+)
 
 def send_to_mistral(user_message):
     url = "https://api.mistral.ai/v1/agents/completions"
