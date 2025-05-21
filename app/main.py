@@ -36,6 +36,7 @@ def health_check():
 @app.post("/webhook/whatsapp")
 async def megaapi_webhook(request: Request):
     payload = await request.json()
+    logging.info(f"Tipo do payload: {type(payload)}, valor: {payload}")
     # Log detalhado do payload
     logging.info("Payload bruto recebido:\n" + pformat(payload))
     numero = None
