@@ -34,16 +34,21 @@ def health_check():
 @app.post("/webhook/whatsapp")
 async def megaapi_webhook(request: Request):
     payload = await request.json()
-    # Validação básica do payload
-    if not isinstance(payload, dict) or 'event' not in payload or 'data' not in payload:
-        raise HTTPException(status_code=400, detail="Payload inválido: faltando 'event' ou 'data'.")
-    data = payload['data']
-    required_fields = ['from', 'to', 'body']
-    for field in required_fields:
-        if field not in data:
-            raise HTTPException(status_code=400, detail=f"Payload inválido: faltando campo '{field}' em 'data'.")
-    logging.info(f"Webhook MegaAPI recebido: event={payload['event']}, from={data['from']}, to={data['to']}, body={data['body']}")
-    # Enviar resposta automática
-    resposta = await enviar_mensagem_whatsapp(data['from'], "Recebido com sucesso!")
-    logging.info(f"Resposta enviada: {resposta}")
-    return {"status": "received", "resposta": resposta} 
+    logging.info(f"Payload bruto recebido: {payload}")
+    # Tentar identificar o número para resposta
+    numero = None
+    texto_recebido = None
+    if isinstance(payload, dict):
+        if 'data' in payload and isinstance(payload['data'], dict):
+            numero = payload['data'].get('from') or payload['data'].get('to')
+            texto_recebido = payload['data'].get('body')
+        elif 'messageData' in payload and isinstance(payload['messageData'], dict):
+            numero = payload['messageData'].get('from') or payload['messageData'].get('to')
+            texto_recebido = payload['messageData'].get('text')
+    if numero:
+        resposta = await enviar_mensagem_whatsapp(numero, "Recebido com sucesso!")
+        logging.info(f"Resposta enviada: {resposta}")
+        return {"status": "received", "resposta": resposta}
+    else:
+        logging.warning("Não foi possível identificar o número para resposta.")
+        return {"status": "received", "detalhe": "Número não identificado no payload."} 
