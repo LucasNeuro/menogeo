@@ -17,7 +17,7 @@ INSTANCE_KEY = os.getenv("INSTANCE_KEY")
 def extrair_numero_whatsapp(remote_jid: str) -> str:
     return remote_jid.split('@')[0]
 
-@app.post("/webhook")
+@app.post("/webhook/whatsapp")
 async def receber_mensagem(req: Request):
     body = await req.json()
     remote_jid = body["key"]["remoteJid"]
