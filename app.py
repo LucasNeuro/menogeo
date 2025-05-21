@@ -27,14 +27,20 @@ def send_to_mistral(user_message):
     }
     payload = {
         "agent_id": MISTRAL_AGENT_ID,
-        "temperature": 0.43,
         "messages": [
             {"role": "system", "content": "Você é Geovana, agente virtual da G4 Telecom."},
             {"role": "user", "content": user_message}
-        ]
+        ],
+        "temperature": 0.43,
+        "response_format": {"type": "text"}
     }
     response = requests.post(url, headers=headers, json=payload)
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        console.log(f"[red]Erro na requisição para Mistral: {e}")
+        rprint(response.text)
+        raise
     return response.json()["choices"][0]["message"]["content"]
 
 def send_whatsapp_message(phone, message):
