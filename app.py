@@ -50,7 +50,7 @@ def send_to_mistral(user_message):
 def send_whatsapp_message(phone, message):
     url = f"{MEGAAPI_URL}/rest/sendMessage/{INSTANCE_KEY}/text"
     headers = {
-        "Authorization": MEGAAPI_KEY,
+        "Authorization": f"Bearer {MEGAAPI_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
