@@ -4,4 +4,5 @@ httpx
 pydantic-ai
 mem0ai
 requests
-python-dotenv>=1.0.0 
+python-dotenv>=1.0.0
+google-generativeai
