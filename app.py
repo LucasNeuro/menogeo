@@ -68,6 +68,8 @@ def webhook():
 
     # Extrai o telefone e a mensagem do payload real
     phone = data.get("jid")
+    if phone and "@s.whatsapp.net" in phone:
+        phone = phone.replace("@s.whatsapp.net", "")
     user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
 
     if not phone or not user_message:
