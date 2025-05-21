@@ -42,7 +42,7 @@ def send_to_mistral(user_message):
     return response.json()["choices"][0]["message"]["content"]
 
 def send_whatsapp_message(phone, message):
-    url = f"{MEGAAPI_URL}/instance{INSTANCE_KEY}/message/sendText"
+    url = f"{MEGAAPI_URL}/instance/{INSTANCE_KEY}/message/sendText"
     headers = {
         "Authorization": MEGAAPI_KEY,
         "Content-Type": "application/json"
@@ -52,7 +52,12 @@ def send_whatsapp_message(phone, message):
         "text": message
     }
     response = requests.post(url, headers=headers, json=payload)
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        console.log(f"[red]Erro ao enviar mensagem via MegaAPI: {e}")
+        rprint(response.text)
+        raise
     return response.json()
 
 @app.route("/webhook", methods=["POST"])
@@ -71,6 +76,7 @@ def webhook():
 
     # 1. Envia mensagem para o agente Mistral
     resposta = send_to_mistral(user_message)
+    console.log(f"[green]Resposta do agente: {resposta}")
     # 2. Responde no WhatsApp via MegaAPI
     send_whatsapp_message(phone, resposta)
     return jsonify({"status": "ok"})
