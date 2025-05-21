@@ -1,0 +1,66 @@
+import os
+import requests
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# MegaAPI credentials
+MEGAAPI_URL = os.getenv("MEGAAPI_URL")
+MEGAAPI_KEY = os.getenv("MEGAAPI_KEY")
+INSTANCE_KEY = os.getenv("INSTANCE_KEY")
+
+# Mistral credentials
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+MISTRAL_AGENT_ID = os.getenv("MISTRAL_AGENT_ID")
+
+app = Flask(__name__)
+
+def send_to_mistral(user_message):
+    url = f"https://api.mistral.ai/v1/agents/{MISTRAL_AGENT_ID}/completions"
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "mistral-large-2.1",
+        "temperature": 0.43,
+        "messages": [
+            {"role": "system", "content": "Você é Geovana, agente virtual da G4 Telecom."},
+            {"role": "user", "content": user_message}
+        ]
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+def send_whatsapp_message(phone, message):
+    url = f"{MEGAAPI_URL}/instance{INSTANCE_KEY}/message/sendText"
+    headers = {
+        "Authorization": MEGAAPI_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "to": phone,
+        "text": message
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    return response.json()
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.json
+    phone = data["from"]
+    user_message = data["body"]
+
+    # 1. Envia mensagem para o agente Mistral
+    resposta = send_to_mistral(user_message)
+
+    # 2. Responde no WhatsApp via MegaAPI
+    send_whatsapp_message(phone, resposta)
+
+    return jsonify({"status": "ok"})
+
+if __name__ == "__main__":
+    app.run(port=5000) 
