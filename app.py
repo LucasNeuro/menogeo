@@ -22,7 +22,12 @@ app = Flask(__name__)
 console = Console(
     color_system="truecolor",
     style="bold",
-    emoji=True
+    emoji=True, 
+    width=100,
+    height=100,
+    tab_size=4,
+    record=True,
+    markup=True,
 )
 
 def send_to_mistral(user_message):
@@ -72,16 +77,15 @@ def webhook():
     console.rule("[bold green]Webhook Recebido")
     rprint(data)
 
-    # Extrai o telefone e a mensagem do payload real
-    phone = data.get("jid")
+    # Extrai o número do usuário (remoteJid) para enviar a resposta
+    phone = data.get("key", {}).get("remoteJid")
     if phone:
-        # Remove o sufixo e mantém só os dígitos
         phone_original = phone
         phone = phone.split("@")[0]
         phone = "".join(filter(str.isdigit, phone))
         console.log(f"[yellow]Telefone original: {phone_original} | Telefone extraído: {phone}")
     else:
-        console.log(f"[red]Campo 'jid' não encontrado no payload!")
+        console.log(f"[red]Campo 'remoteJid' não encontrado no payload!")
     user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
 
     if not phone or not user_message:
