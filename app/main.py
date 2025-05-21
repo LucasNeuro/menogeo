@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
-from app.agent import GEOVANA
+from app.agent import processar_mensagem_geovana, fallback_transferencia
 from app.utils import extrair_cpf
-from app.memory import buscar_cpf_por_remotejid, vincular_cpf_remotejid
+from app.memory import buscar_cpf_por_remotejid, vincular_cpf_remotejid, buscar_contexto_cliente
 import httpx
 import os
 from dotenv import load_dotenv
@@ -42,14 +42,15 @@ async def receber_mensagem(req: Request):
             )
             return {"status": "aguardando_cpf"}
 
-    resposta = await GEOVANA.run(input=msg, context={"cpf": cpf})
+    contexto = await buscar_contexto_cliente(cpf)
+    resposta = await processar_mensagem_geovana(msg, contexto)
 
     await httpx.post(
         f"{MEGAAPI_URL}/instance{INSTANCE_KEY}/sendMessage",
         headers={"Authorization": MEGAAPI_KEY},
         json={
             "chatId": jid,
-            "text": resposta.output
+            "text": resposta
         }
     )
     return {"status": "ok"}
