@@ -2,6 +2,8 @@ from fastapi import FastAPI, Request, HTTPException
 import logging
 import os
 import httpx
+import json
+from pprint import pformat
 
 app = FastAPI()
 
@@ -34,17 +36,30 @@ def health_check():
 @app.post("/webhook/whatsapp")
 async def megaapi_webhook(request: Request):
     payload = await request.json()
-    logging.info(f"Payload bruto recebido: {payload}")
-    # Tentar identificar o número para resposta
+    # Log detalhado do payload
+    logging.info("Payload bruto recebido:\n" + pformat(payload))
     numero = None
     texto_recebido = None
+    # Tentar extrair de diferentes formatos
     if isinstance(payload, dict):
         if 'data' in payload and isinstance(payload['data'], dict):
-            numero = payload['data'].get('from') or payload['data'].get('to')
-            texto_recebido = payload['data'].get('body')
+            data = payload['data']
+            numero = data.get('from') or data.get('to')
+            texto_recebido = data.get('body')
+            # Tentar extrair do remoteJid
+            if not numero and 'key' in data and isinstance(data['key'], dict):
+                remote_jid = data['key'].get('remoteJid')
+                if remote_jid and remote_jid.endswith('@s.whatsapp.net'):
+                    numero = remote_jid.replace('@s.whatsapp.net', '')
         elif 'messageData' in payload and isinstance(payload['messageData'], dict):
-            numero = payload['messageData'].get('from') or payload['messageData'].get('to')
-            texto_recebido = payload['messageData'].get('text')
+            msg_data = payload['messageData']
+            numero = msg_data.get('from') or msg_data.get('to')
+            texto_recebido = msg_data.get('text')
+            # Tentar extrair do remoteJid
+            if not numero and 'key' in msg_data and isinstance(msg_data['key'], dict):
+                remote_jid = msg_data['key'].get('remoteJid')
+                if remote_jid and remote_jid.endswith('@s.whatsapp.net'):
+                    numero = remote_jid.replace('@s.whatsapp.net', '')
     if numero:
         resposta = await enviar_mensagem_whatsapp(numero, "Recebido com sucesso!")
         logging.info(f"Resposta enviada: {resposta}")
