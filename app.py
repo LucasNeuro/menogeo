@@ -2,6 +2,8 @@ import os
 import requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from rich import print as rprint
+from rich.console import Console
 
 load_dotenv()
 
@@ -15,6 +17,7 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 MISTRAL_AGENT_ID = os.getenv("MISTRAL_AGENT_ID")
 
 app = Flask(__name__)
+console = Console()
 
 def send_to_mistral(user_message):
     url = f"https://api.mistral.ai/v1/agents/{MISTRAL_AGENT_ID}/completions"
@@ -51,15 +54,17 @@ def send_whatsapp_message(phone, message):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
-    phone = data["from"]
-    user_message = data["body"]
-
+    console.rule("[bold green]Webhook Recebido")
+    rprint(data)
+    phone = data.get("from")
+    user_message = data.get("body")
+    if not phone or not user_message:
+        console.log(f"[red]Payload inesperado: {data}")
+        return jsonify({"error": "Payload inesperado", "payload": data}), 400
     # 1. Envia mensagem para o agente Mistral
     resposta = send_to_mistral(user_message)
-
     # 2. Responde no WhatsApp via MegaAPI
     send_whatsapp_message(phone, resposta)
-
     return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
