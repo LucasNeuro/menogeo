@@ -45,5 +45,6 @@ async def vincular_cpf_remotejid(remote_jid: str, cpf: str):
 
 async def buscar_cpf_por_remotejid(remote_jid: str) -> str:
     """Busca o CPF vinculado a um remoteJid no Mem0AI."""
-    vinculo = await client.get("vinculos_whatsapp", {"remote_jid": remote_jid})
+    result = await client.search("vinculos_whatsapp", {"remote_jid": remote_jid})
+    vinculo = result[0] if result else None
     return vinculo["cpf"] if vinculo and "cpf" in vinculo else None
