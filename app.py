@@ -48,7 +48,7 @@ def send_to_mistral(user_message):
     return response.json()["choices"][0]["message"]["content"]
 
 def send_whatsapp_message(phone, message):
-    url = f"{MEGAAPI_URL}/instance/{INSTANCE_KEY}/message/sendText"
+    url = f"{MEGAAPI_URL}/rest/sendMessage/{INSTANCE_KEY}/text"
     headers = {
         "Authorization": MEGAAPI_KEY,
         "Content-Type": "application/json"
