@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from rich import print as rprint
 from rich.console import Console
 import pprint
+import json
 
 load_dotenv()
 
@@ -54,6 +55,46 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "consultar_boletos",
+            "description": "Consulta os boletos do cliente no IXC a partir do CPF.",
+            "parameters": {
+                "cpf": {"type": "string", "description": "CPF do cliente"}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_status_plano",
+            "description": "Consulta o status do plano do cliente no IXC a partir do CPF.",
+            "parameters": {
+                "cpf": {"type": "string", "description": "CPF do cliente"}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_dados_cadastro",
+            "description": "Consulta os dados cadastrais do cliente no IXC a partir do CPF.",
+            "parameters": {
+                "cpf": {"type": "string", "description": "CPF do cliente"}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_valor_plano",
+            "description": "Consulta o valor do plano do cliente no IXC a partir do CPF.",
+            "parameters": {
+                "cpf": {"type": "string", "description": "CPF do cliente"}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "abrir_os",
             "description": "Abre uma ordem de serviço para o cliente.",
             "parameters": {
@@ -65,10 +106,10 @@ tools = [
     {
         "type": "function",
         "function": {
-            "name": "encaminhar_humano",
-            "description": "Transfere o atendimento para um humano.",
+            "name": "transferir_para_humano",
+            "description": "Transfere o atendimento para um humano e envia um resumo do atendimento para o webhook Make.com.",
             "parameters": {
-                "id_cliente": {"type": "string", "description": "ID do cliente"},
+                "cpf": {"type": "string", "description": "CPF do cliente"},
                 "resumo": {"type": "string", "description": "Resumo da conversa"}
             }
         }
@@ -277,6 +318,16 @@ def webhook():
             args = tool_call["arguments"]
             if tool_name == "consultar_dados_ixc":
                 tool_result = consultar_dados_ixc(args["cpf"])
+            elif tool_name == "consultar_boletos":
+                tool_result = consultar_boletos_ixc(args["cpf"])
+            elif tool_name == "consultar_status_plano":
+                tool_result = consultar_status_plano_ixc(args["cpf"])
+            elif tool_name == "consultar_dados_cadastro":
+                tool_result = consultar_dados_cadastro_ixc(args["cpf"])
+            elif tool_name == "consultar_valor_plano":
+                tool_result = consultar_valor_plano_ixc(args["cpf"])
+            elif tool_name == "transferir_para_humano":
+                tool_result = transferir_para_humano(args["cpf"], args["resumo"])
             elif tool_name == "abrir_os":
                 tool_result = abrir_os(args["id_cliente"], args["motivo"])
             elif tool_name == "encaminhar_humano":
@@ -300,6 +351,75 @@ def webhook():
     if final_response:
         send_whatsapp_message(phone, final_response)
     return jsonify(result)
+
+# Nova tool: consultar_boletos
+
+def consultar_boletos_ixc(cpf):
+    payload = {"cpf": cpf}
+    try:
+        response = requests.post(f"{IXC_API_URL}/consultarBoletos", json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        return {"erro": "Timeout ao consultar boletos"}
+    except Exception as e:
+        return {"erro": str(e)}
+
+# Nova tool: consultar_status_plano
+
+def consultar_status_plano_ixc(cpf):
+    payload = {"cpf": cpf}
+    try:
+        response = requests.post(f"{IXC_API_URL}/consultarStatusPlano", json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        return {"erro": "Timeout ao consultar status do plano"}
+    except Exception as e:
+        return {"erro": str(e)}
+
+# Nova tool: consultar_dados_cadastro
+
+def consultar_dados_cadastro_ixc(cpf):
+    payload = {"cpf": cpf}
+    try:
+        response = requests.post(f"{IXC_API_URL}/consultarDadosCadastro", json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        return {"erro": "Timeout ao consultar dados cadastrais"}
+    except Exception as e:
+        return {"erro": str(e)}
+
+# Nova tool: consultar_valor_plano
+
+def consultar_valor_plano_ixc(cpf):
+    payload = {"cpf": cpf}
+    try:
+        response = requests.post(f"{IXC_API_URL}/consultarValorPlano", json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        return {"erro": "Timeout ao consultar valor do plano"}
+    except Exception as e:
+        return {"erro": str(e)}
+
+# Nova tool: transferir_para_humano
+
+def transferir_para_humano(cpf, resumo):
+    payload = {
+        "cpf": cpf,
+        "resumo": resumo
+    }
+    webhook_url = "https://hook.us2.make.com/f1x53952bxirumz2gnfpoabdo397uws2"
+    try:
+        response = requests.post(webhook_url, json=payload, timeout=30)
+        response.raise_for_status()
+        return {"status": "ok", "mensagem": "Transferência para humano solicitada."}
+    except requests.exceptions.Timeout:
+        return {"erro": "Timeout ao transferir para humano"}
+    except Exception as e:
+        return {"erro": str(e)}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
