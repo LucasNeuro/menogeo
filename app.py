@@ -442,9 +442,13 @@ def webhook():
                 messages.append({
                     "role": "function",
                     "name": tool_name,
-                    "content": json.dumps(tool_result)
+                    "content": json.dumps(tool_result, ensure_ascii=False)
                 })
-                salvar_historico(remote_jid, args.get("cpf", phone), {"role": "function", "name": tool_name, "content": tool_result})
+                salvar_historico(remote_jid, args.get("cpf", phone), {
+                    "role": "function",
+                    "name": tool_name,
+                    "content": json.dumps(tool_result, ensure_ascii=False)
+                })
                 salvar_log(remote_jid, args.get("cpf", phone), f"[LOG] Tool {tool_name} chamada com resultado: {tool_result}")
             result = call_mistral(messages, tools)
             print("[LOG] Nova resposta do Mistral após tool_call:")
