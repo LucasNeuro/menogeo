@@ -7,6 +7,7 @@ from rich import print as rprint
 from rich.console import Console
 import pprint
 import json
+import redis
 
 load_dotenv()
 
@@ -119,6 +120,57 @@ tools = [
     }
 ]
 
+# Configuração do Redis via .env
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+REDIS_DB = int(os.getenv("REDIS_DB", 0))
+REDIS_TTL = int(os.getenv("REDIS_TTL", 1800))  # 30 minutos padrão
+
+redis_client = redis.StrictRedis(
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    password=REDIS_PASSWORD,
+    db=REDIS_DB,
+    decode_responses=True
+)
+
+def get_namespace(remoteJid, cpf):
+    return f"conversa:{remoteJid}:{cpf}:"
+
+# Função para salvar dados do IXC com TTL
+def salvar_ixc(remoteJid, cpf, dados_ixc):
+    key = get_namespace(remoteJid, cpf) + "ixc"
+    redis_client.setex(key, REDIS_TTL, json.dumps(dados_ixc))
+    salvar_log(remoteJid, cpf, f"[LOG] Dados IXC salvos no cache: {json.dumps(dados_ixc, ensure_ascii=False)}")
+
+def buscar_ixc(remoteJid, cpf):
+    key = get_namespace(remoteJid, cpf) + "ixc"
+    valor = redis_client.get(key)
+    if valor:
+        salvar_log(remoteJid, cpf, f"[LOG] Dados IXC recuperados do cache.")
+        return json.loads(valor)
+    return None
+
+# Função para salvar histórico da conversa (append)
+def salvar_historico(remoteJid, cpf, mensagem):
+    key = get_namespace(remoteJid, cpf) + "historico"
+    redis_client.rpush(key, json.dumps(mensagem))
+    salvar_log(remoteJid, cpf, f"[LOG] Mensagem adicionada ao histórico: {json.dumps(mensagem, ensure_ascii=False)}")
+
+def buscar_historico(remoteJid, cpf):
+    key = get_namespace(remoteJid, cpf) + "historico"
+    return [json.loads(m) for m in redis_client.lrange(key, 0, -1)]
+
+# Função para salvar logs (append)
+def salvar_log(remoteJid, cpf, log):
+    key = get_namespace(remoteJid, cpf) + "logs"
+    redis_client.rpush(key, log)
+
+def buscar_logs(remoteJid, cpf):
+    key = get_namespace(remoteJid, cpf) + "logs"
+    return redis_client.lrange(key, 0, -1)
+
 def send_to_mistral(user_message):
     url = "https://api.mistral.ai/v1/agents/completions"
     headers = {
@@ -222,13 +274,20 @@ def consultar_status_plano(id_cliente):
     response.raise_for_status()
     return response.json()
 
-def consultar_dados_ixc(cpf):
+def consultar_dados_ixc(cpf, remoteJid=None):
+    if remoteJid:
+        cache = buscar_ixc(remoteJid, cpf)
+        if cache:
+            print(f"[LOG] Usando dados do IXC do cache para CPF {cpf}")
+            return cache
     payload = {"cpf": cpf}
     try:
         response = requests.post(IXC_API_URL, json=payload, timeout=30)
         response.raise_for_status()
         data = response.json()
         print("[LOG] Dados retornados do IXC para CPF", cpf, ":", json.dumps(data, ensure_ascii=False, indent=2))
+        if remoteJid:
+            salvar_ixc(remoteJid, cpf, data)
         return data
     except requests.exceptions.Timeout:
         return {"erro": "Timeout ao consultar IXC"}
@@ -322,7 +381,7 @@ def webhook():
             tool_name = tool_call["name"]
             args = tool_call["arguments"]
             if tool_name == "consultar_dados_ixc":
-                tool_result = consultar_dados_ixc(args["cpf"])
+                tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
             elif tool_name == "consultar_boletos":
                 tool_result = consultar_boletos_ixc(args["cpf"])
             elif tool_name == "consultar_status_plano":
@@ -344,6 +403,8 @@ def webhook():
                 "name": tool_name,
                 "content": json.dumps(tool_result)
             })
+            salvar_historico(remote_jid, args["cpf"], {"role": "function", "name": tool_name, "content": tool_result})
+            salvar_log(remote_jid, args["cpf"], f"[LOG] Tool {tool_name} chamada com resultado: {tool_result}")
         result = call_mistral(messages, tools)
         print("[LOG] Nova resposta do Mistral após tool_call:")
         pprint.pprint(result)
