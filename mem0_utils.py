@@ -27,6 +27,8 @@ def get_context_mem0(user_id):
     """
     params = {"user_id": user_id}
     response = requests.get(f"{MEM0_API_URL}/get", headers=headers, params=params)
+    if response.status_code == 404:
+        return None
     response.raise_for_status()
     return response.json().get("memory")
 
