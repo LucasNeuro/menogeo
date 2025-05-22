@@ -335,10 +335,11 @@ def webhook():
             else:
                 tool_result = {"erro": "Tool não implementada"}
             print("[LOG] Resultado da tool:", tool_result)
+            # Adiciona o resultado da tool ao histórico como mensagem de função
             messages.append({
                 "role": "function",
                 "name": tool_name,
-                "content": str(tool_result)
+                "content": json.dumps(tool_result)
             })
         result = call_mistral(messages, tools)
         print("[LOG] Nova resposta do Mistral após tool_call:")
