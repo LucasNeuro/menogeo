@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from rich import print as rprint
 from rich.console import Console
 from mem0_utils import save_context_mem0, get_context_mem0
+from ixc_utils import buscar_dados_ixc
 
 load_dotenv()
 

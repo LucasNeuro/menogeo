@@ -1,6 +1,6 @@
 import os
 import requests
-from app import buscar_dados_ixc  # Importa a função de busca do IXC
+from ixc_utils import buscar_dados_ixc  # Corrigido para importar do utilitário
 
 MEM0_API_KEY = os.getenv("MEM0_API_KEY")
 MEM0_API_URL = os.getenv("MEM0_API_URL")  # Agora carregado do .env
