@@ -1,5 +1,6 @@
 import os
 import requests
+import time
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from rich import print as rprint
@@ -47,26 +48,31 @@ def send_to_mistral(user_message):
         raise
     return response.json()["choices"][0]["message"]["content"]
 
-def send_whatsapp_message(phone, message):
+def send_whatsapp_message(phone, message, max_retries=3, timeout=10):
+    """
+    Envia mensagem via MegaAPI. O campo 'to' deve ser apenas o número puro, sem sufixo.
+    """
     url = f"{MEGAAPI_URL}/rest/sendMessage/{INSTANCE_KEY}/text"
     headers = {
         "Authorization": f"Bearer {MEGAAPI_KEY}",
         "Content-Type": "application/json"
     }
-    # Enviar apenas o número puro, conforme documentação da MegaAPI
     payload = {
-        "to": phone,  # Exemplo: "5511970364501"
+        "to": phone,  # Exemplo: "5511970364501" (apenas número puro)
         "text": message
     }
     console.log(f"[cyan]Enviando requisição para MegaAPI: {payload}")
-    response = requests.post(url, headers=headers, json=payload)
-    try:
-        response.raise_for_status()
-    except requests.exceptions.HTTPError as e:
-        console.log(f"[red]Erro ao enviar mensagem via MegaAPI: {e}")
-        rprint(response.text)
-        raise
-    return response.json()
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            console.log(f"[red]Tentativa {attempt} - Erro ao enviar mensagem via MegaAPI: {e}")
+            if attempt == max_retries:
+                rprint(response.text if 'response' in locals() else str(e))
+                raise
+            time.sleep(2)  # Espera 2 segundos antes de tentar novamente
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -92,15 +98,19 @@ def webhook():
 
     user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
 
-    if not phone or not user_message:
-        console.log(f"[red]Payload inesperado: {data}")
-        return jsonify({"error": "Payload inesperado", "payload": data}), 400
+    # Validação adicional do número (mínimo 10 dígitos)
+    if not phone or not user_message or len(phone) < 10:
+        console.log(f"[red]Payload inesperado ou número inválido: {data}")
+        return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
     resposta = send_to_mistral(user_message)
     console.log(f"[green]Resposta do agente: {resposta}")
     console.log(f"[cyan]Enviando para MegaAPI: to={phone}, text={resposta}")
-    send_whatsapp_message(phone, resposta)
-    return jsonify({"status": "ok"})
+    try:
+        megaapi_response = send_whatsapp_message(phone, resposta)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"status": "ok", "megaapi_response": megaapi_response})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
