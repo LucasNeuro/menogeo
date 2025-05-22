@@ -226,6 +226,21 @@ def webhook():
 
     user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
 
+    # Se a mensagem for um CPF válido, busca dados no IXC_API e salva no Mem0
+    if user_message and len(user_message) >= 11 and user_message.isdigit():
+        cpf = user_message
+        try:
+            dados_ixc = buscar_dados_ixc(cpf)
+            nome = dados_ixc.get("cliente", {}).get("razao_social", "")
+            cumprimento = f"Olá, {nome}! Dados localizados! Como posso te ajudar?" if nome else "Olá! Dados localizados! Como posso te ajudar?"
+            dados_ixc["cumprimentado"] = True
+            save_context_mem0(phone, dados_ixc)  # Salva usando o telefone como chave
+            send_whatsapp_message(phone, cumprimento)
+            return jsonify({"status": "contexto_salvo"})
+        except Exception as e:
+            send_whatsapp_message(phone, "Não consegui localizar seus dados. Por favor, confira o CPF informado.")
+            return jsonify({"error": str(e)}), 400
+
     # Tenta buscar contexto do cliente na memória (Mem0) usando o telefone como chave
     context = get_context_mem0(phone) if phone else None
 
@@ -233,23 +248,6 @@ def webhook():
     if not context:
         send_whatsapp_message(phone, "Por favor, me informe seu CPF para localizar seus dados.")
         return jsonify({"status": "aguardando_cpf"})
-
-    # Se a mensagem for um CPF válido, busca dados no IXC_API e salva no Mem0
-    if user_message and len(user_message) >= 11 and user_message.isdigit():
-        cpf = user_message
-        try:
-            dados_ixc = buscar_dados_ixc(cpf)
-            # Cumprimentar o usuário na primeira mensagem
-            nome = dados_ixc.get("cliente", {}).get("razao_social", "")
-            cumprimento = f"Olá, {nome}! Dados localizados! Como posso te ajudar?" if nome else "Olá! Dados localizados! Como posso te ajudar?"
-            # Marca como cumprimentado no contexto
-            dados_ixc["cumprimentado"] = True
-            save_context_mem0(cpf, dados_ixc)
-            send_whatsapp_message(phone, cumprimento)
-            return jsonify({"status": "contexto_salvo"})
-        except Exception as e:
-            send_whatsapp_message(phone, "Não consegui localizar seus dados. Por favor, confira o CPF informado.")
-            return jsonify({"error": str(e)}), 400
 
     # Cumprimenta apenas se ainda não cumprimentou nesta sessão
     if context and not context.get("cumprimentado"):
