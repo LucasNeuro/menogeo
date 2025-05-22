@@ -53,10 +53,13 @@ def send_whatsapp_message(phone, message):
         "Authorization": f"Bearer {MEGAAPI_KEY}",
         "Content-Type": "application/json"
     }
+    # Ensure phone number is properly formatted with @s.whatsapp.net
+    formatted_phone = f"{phone}@s.whatsapp.net" if not "@" in phone else phone
     payload = {
-        "to": phone,
+        "to": formatted_phone,
         "text": message
     }
+    console.log(f"[cyan]Enviando requisição para MegaAPI: {payload}")
     response = requests.post(url, headers=headers, json=payload)
     try:
         response.raise_for_status()
