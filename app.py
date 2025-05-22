@@ -124,6 +124,7 @@ tools = [
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+REDIS_USERNAME = os.getenv("REDIS_USERNAME", None)
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 REDIS_TTL = int(os.getenv("REDIS_TTL", 1800))  # 30 minutos padrão
 
@@ -131,6 +132,7 @@ redis_client = redis.StrictRedis(
     host=REDIS_HOST,
     port=REDIS_PORT,
     password=REDIS_PASSWORD,
+    username=REDIS_USERNAME,
     db=REDIS_DB,
     decode_responses=True
 )
