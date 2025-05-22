@@ -194,7 +194,9 @@ def buscar_dados_ixc(cpf):
     payload = {"cpf": cpf}
     response = requests.post(IXC_API_URL, json=payload)
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    print(f"[DEBUG IXC] Retorno do IXC_API para CPF {cpf}: {data}")
+    return data
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
