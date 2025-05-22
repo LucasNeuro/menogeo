@@ -235,13 +235,19 @@ def webhook():
         cpf = user_message
         try:
             dados_ixc = buscar_dados_ixc(cpf)
-            nome = dados_ixc.get("cliente", {}).get("razao_social", "")
+            print(f"[DEBUG] Dados retornados do IXC: {dados_ixc}")
+            cliente = dados_ixc.get("cliente")
+            if not cliente:
+                send_whatsapp_message(phone, "Não consegui localizar seus dados. Por favor, confira o CPF informado.")
+                return jsonify({"error": "Cliente não encontrado no IXC"}), 400
+            nome = cliente.get("razao_social", "")
             cumprimento = f"Olá, {nome}! Dados localizados! Como posso te ajudar?" if nome else "Olá! Dados localizados! Como posso te ajudar?"
             dados_ixc["cumprimentado"] = True
-            save_context_mem0(phone, dados_ixc)  # Salva usando o telefone como chave
+            save_context_mem0(phone, dados_ixc)
             send_whatsapp_message(phone, cumprimento)
             return jsonify({"status": "contexto_salvo"})
         except Exception as e:
+            print(f"[ERRO] Falha ao processar dados do IXC: {e}")
             send_whatsapp_message(phone, "Não consegui localizar seus dados. Por favor, confira o CPF informado.")
             return jsonify({"error": str(e)}), 400
 
