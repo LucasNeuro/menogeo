@@ -5,6 +5,7 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from rich import print as rprint
 from rich.console import Console
+import pprint
 
 load_dotenv()
 
@@ -263,10 +264,15 @@ def webhook():
         {"role": "system", "content": PROMPT},
         {"role": "user", "content": user_message}
     ]
+    print("\n[LOG] Enviando para Mistral:")
+    pprint.pprint(messages)
     result = call_mistral(messages, tools)
+    print("[LOG] Resposta do Mistral:")
+    pprint.pprint(result)
     # Loop para processar tool_calls até o agente não pedir mais nenhuma
     while "tool_calls" in result and result["tool_calls"]:
         for tool_call in result["tool_calls"]:
+            print("[LOG] Tool call recebida:", tool_call)
             tool_name = tool_call["name"]
             args = tool_call["arguments"]
             if tool_name == "consultar_dados_ixc":
@@ -277,13 +283,16 @@ def webhook():
                 tool_result = encaminhar_humano(args["id_cliente"], args["resumo"])
             else:
                 tool_result = {"erro": "Tool não implementada"}
+            print("[LOG] Resultado da tool:", tool_result)
             messages.append({
                 "role": "function",
                 "name": tool_name,
                 "content": str(tool_result)
             })
         result = call_mistral(messages, tools)
-    # Quando não houver mais tool_calls, retorna a resposta final do agente
+        print("[LOG] Nova resposta do Mistral após tool_call:")
+        pprint.pprint(result)
+    print("[LOG] Resposta final do agente:", result)
     return jsonify(result)
 
 if __name__ == "__main__":
