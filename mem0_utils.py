@@ -1,5 +1,6 @@
 import os
 import requests
+from app import buscar_dados_ixc  # Importa a função de busca do IXC
 
 MEM0_API_KEY = os.getenv("MEM0_API_KEY")
 MEM0_API_URL = os.getenv("MEM0_API_URL")  # Agora carregado do .env
@@ -33,11 +34,14 @@ def get_context_mem0(user_id):
     return response.json().get("memory")
 
 def consultar_boletos(contexto_cliente):
-    contratos = contexto_cliente.get('contratos', {}).get('contratosAtivos', [])
+    cpf = contexto_cliente.get("cpf")
+    if not cpf:
+        return {"erro": "CPF não encontrado no contexto"}
+    dados_ixc = buscar_dados_ixc(cpf)
+    contratos = dados_ixc.get('contratos', {}).get('contratosAtivos', [])
     status_contrato = contratos[0]['status_contrato'] if contratos else None
-    login_online = contexto_cliente.get('login', {}).get('online')
-    boletos = contexto_cliente.get('boletos', [])
-    # Ordena por data de vencimento
+    login_online = dados_ixc.get('login', {}).get('online')
+    boletos = dados_ixc.get('boletos', [])
     boletos_ordenados = sorted(boletos, key=lambda b: b['data_vencimento'])[:3]
     resultado = {
         'status_contrato': status_contrato,
@@ -55,10 +59,14 @@ def consultar_boletos(contexto_cliente):
     return resultado
 
 def consultar_status_plano(contexto_cliente):
-    contratos = contexto_cliente.get('contratos', {}).get('contratosAtivos', [])
+    cpf = contexto_cliente.get("cpf")
+    if not cpf:
+        return {"erro": "CPF não encontrado no contexto"}
+    dados_ixc = buscar_dados_ixc(cpf)
+    contratos = dados_ixc.get('contratos', {}).get('contratosAtivos', [])
     contrato = contratos[0] if contratos else {}
-    login = contexto_cliente.get('login', {})
-    cliente = contexto_cliente.get('cliente', {})
+    login = dados_ixc.get('login', {})
+    cliente = dados_ixc.get('cliente', {})
     return {
         'status_contrato': contrato.get('status_contrato'),
         'status_internet': contrato.get('status_internet'),
@@ -68,12 +76,16 @@ def consultar_status_plano(contexto_cliente):
     }
 
 def estou_sem_internet(contexto_cliente):
-    contratos = contexto_cliente.get('contratos', {}).get('contratosAtivos', [])
+    cpf = contexto_cliente.get("cpf")
+    if not cpf:
+        return {"erro": "CPF não encontrado no contexto"}
+    dados_ixc = buscar_dados_ixc(cpf)
+    contratos = dados_ixc.get('contratos', {}).get('contratosAtivos', [])
     contrato = contratos[0] if contratos else {}
-    login = contexto_cliente.get('login', {})
-    cliente = contexto_cliente.get('cliente', {})
-    os_abertas = contexto_cliente.get('OS', [])
-    boletos = contexto_cliente.get('boletos', [])
+    login = dados_ixc.get('login', {})
+    cliente = dados_ixc.get('cliente', {})
+    os_abertas = dados_ixc.get('OS', [])
+    boletos = dados_ixc.get('boletos', [])
     return {
         'status_contrato': contrato.get('status_contrato'),
         'status_internet': contrato.get('status_internet'),
@@ -86,8 +98,12 @@ def estou_sem_internet(contexto_cliente):
     }
 
 def consulta_dados_cadastro(contexto_cliente):
-    cliente = contexto_cliente.get('cliente', {})
-    contratos = contexto_cliente.get('contratos', {}).get('contratosAtivos', [])
+    cpf = contexto_cliente.get("cpf")
+    if not cpf:
+        return {"erro": "CPF não encontrado no contexto"}
+    dados_ixc = buscar_dados_ixc(cpf)
+    cliente = dados_ixc.get('cliente', {})
+    contratos = dados_ixc.get('contratos', {}).get('contratosAtivos', [])
     contrato = contratos[0] if contratos else {}
     return {
         'razao_social': cliente.get('razao_social'),
@@ -101,10 +117,14 @@ def consulta_dados_cadastro(contexto_cliente):
     }
 
 def consulta_valor_plano(contexto_cliente):
-    contratos = contexto_cliente.get('contratos', {}).get('contratosAtivos', [])
+    cpf = contexto_cliente.get("cpf")
+    if not cpf:
+        return {"erro": "CPF não encontrado no contexto"}
+    dados_ixc = buscar_dados_ixc(cpf)
+    contratos = dados_ixc.get('contratos', {}).get('contratosAtivos', [])
     contrato = contratos[0] if contratos else {}
-    boletos = contexto_cliente.get('boletos', [])
-    login = contexto_cliente.get('login', {})
+    boletos = dados_ixc.get('boletos', [])
+    login = dados_ixc.get('login', {})
     valor = boletos[0]['valor'] if boletos else None
     return {
         'contrato': contrato.get('contrato'),
