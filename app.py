@@ -29,16 +29,7 @@ console = Console(
     emoji=True, 
 )
 
-PROMPT = """
-Você é Geovana, agente virtual oficial da G4 Telecom.
-Sempre que precisar de qualquer informação do cliente, peça para chamar a função consultar_dados_ixc passando o CPF.
-Use os dados retornados para responder conforme a intenção do usuário, buscando nos campos do JSON: cliente, boletos, contratos, login, OS.
-Se precisar abrir uma ordem de serviço, use a função abrir_os.
-Se precisar transferir para um atendente humano, use a função encaminhar_humano.
-Responda sempre de forma clara, cordial, com listas, tópicos em negrito e poucos emojis, adaptando para leitura no WhatsApp.
-Nunca envie informações não solicitadas e só peça dados ao backend se realmente necessário.
-Se não conseguir resolver, oriente o usuário a falar com um atendente humano.
-"""
+
 
 tools = [
     {
@@ -293,6 +284,12 @@ def webhook():
         print("[LOG] Nova resposta do Mistral após tool_call:")
         pprint.pprint(result)
     print("[LOG] Resposta final do agente:", result)
+    # Extrai a resposta final do Mistral
+    final_response = None
+    if result and "choices" in result and result["choices"]:
+        final_response = result["choices"][0]["message"]["content"]
+    if final_response:
+        send_whatsapp_message(phone, final_response)
     return jsonify(result)
 
 if __name__ == "__main__":
