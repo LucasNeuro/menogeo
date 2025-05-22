@@ -51,17 +51,19 @@ def send_to_mistral(user_message):
 def send_whatsapp_message(phone, message, max_retries=3, timeout=10):
     """
     Envia mensagem via MegaAPI. O campo 'to' deve ser apenas o número puro para chat individual, e terminar com @g.us para grupos.
+    O payload deve ser enviado dentro de 'messageData', conforme documentação MegaAPI.
     """
-    # Log detalhado das variáveis de ambiente e payload
     console.log(f"[magenta]MEGAAPI_URL: {MEGAAPI_URL}")
     console.log(f"[magenta]INSTANCE_KEY: {INSTANCE_KEY}")
     console.log(f"[magenta]MEGAAPI_KEY: {MEGAAPI_KEY[:6]}... (ocultado)")
-    # Garante que não há sufixo para chat individual
     if phone.endswith("@s.whatsapp.net"):
         phone = phone.replace("@s.whatsapp.net", "")
     payload = {
-        "to": phone,  # Exemplo: "5511970364501" (apenas número puro)
-        "text": message
+        "messageData": {
+            "to": phone,
+            "text": message,
+            "linkPreview": False
+        }
     }
     console.log(f"[magenta]Payload: {payload}")
     url = f"{MEGAAPI_URL}/rest/sendMessage/{INSTANCE_KEY}/text"
@@ -119,6 +121,8 @@ def webhook():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"status": "ok", "megaapi_response": megaapi_response})
+
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
