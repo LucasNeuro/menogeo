@@ -363,8 +363,9 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs):
             "name": "consultar_dados_ixc",
             "content": json.dumps(dados_ixc)
         })
-        # Salva histórico e logs
-        salvar_historico(remoteJid, message, messages)
+        # Salva histórico e logs (corrigido para salvar apenas a mensagem individual)
+        salvar_historico(remoteJid, message, {"role": "user", "content": message})
+        salvar_historico(remoteJid, message, {"role": "function", "name": "consultar_dados_ixc", "content": json.dumps(dados_ixc)})
         salvar_log(remoteJid, message, logs)
         return True  # Indica que processou CPF
     return False
