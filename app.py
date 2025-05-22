@@ -202,6 +202,17 @@ def webhook():
     console.rule("[bold green]Webhook Recebido")
     rprint(data)
 
+    # Ignora mensagens enviadas pelo próprio bot, grupo, broadcast ou que não sejam texto do usuário
+    if (
+        data.get("key", {}).get("fromMe") or
+        data.get("fromMe") or
+        data.get("messageType") != "extendedTextMessage" or
+        data.get("isGroup") or
+        data.get("broadcast")
+    ):
+        console.log("[yellow] Ignorando mensagem enviada pelo próprio bot, grupo, broadcast ou não é texto do usuário.")
+        return jsonify({"status": "ignored"})
+
     # Extrai o número do usuário (remoteJid)
     remote_jid = data.get("remoteJid") or data.get("key", {}).get("remoteJid")
     phone = None
