@@ -357,15 +357,8 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
             salvar_ixc(remoteJid, message, dados_ixc)
         # Log detalhado
         print(f"[LOG] Dados IXC retornados para CPF {message}: {dados_ixc}")
-        # Adiciona ao histórico como tool_call (role: tool)
-        messages.append({
-            "role": "tool",
-            "name": "consultar_dados_ixc",
-            "content": json.dumps(dados_ixc, ensure_ascii=False)
-        })
-        # Salva histórico e logs (corrigido para role: tool)
+        # Salva histórico e logs
         salvar_historico(remoteJid, message, {"role": "user", "content": message})
-        salvar_historico(remoteJid, message, {"role": "tool", "name": "consultar_dados_ixc", "content": json.dumps(dados_ixc, ensure_ascii=False)})
         salvar_log(remoteJid, message, f"[LOG] Mensagem processada: {message}")
         return True  # Indica que processou CPF
     return False
