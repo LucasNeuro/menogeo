@@ -230,45 +230,35 @@ def webhook():
 
     print(f"[DEBUG] Mensagem recebida do usuário: {user_message}")
 
-    # Se a mensagem for um CPF válido, busca dados no IXC_API e salva no Mem0
-    if user_message and len(user_message) >= 11 and user_message.isdigit():
-        cpf = user_message
-        try:
-            dados_ixc = buscar_dados_ixc(cpf)
-            print(f"[DEBUG] Dados retornados do IXC: {dados_ixc}")
-            cliente = dados_ixc.get("cliente")
-            if not cliente:
-                send_whatsapp_message(phone, "Não consegui localizar seus dados. Por favor, confira o CPF informado.")
-                return jsonify({"error": "Cliente não encontrado no IXC"}), 400
-            nome = cliente.get("razao_social", "")
-            cumprimento = f"Olá, {nome}! Dados localizados! Como posso te ajudar?" if nome else "Olá! Dados localizados! Como posso te ajudar?"
-            dados_ixc["cumprimentado"] = True
-            save_context_mem0(phone, dados_ixc)
-            send_whatsapp_message(phone, cumprimento)
-            return jsonify({"status": "contexto_salvo"})
-        except Exception as e:
-            print(f"[ERRO] Falha ao processar dados do IXC: {e}")
-            send_whatsapp_message(phone, "Não consegui localizar seus dados. Por favor, confira o CPF informado.")
-            return jsonify({"error": str(e)}), 400
-
-    # Tenta buscar contexto do cliente na memória (Mem0) usando o telefone como chave
+    # Busca contexto do cliente na memória (Mem0) usando o telefone como chave
     context = get_context_mem0(phone) if phone else None
+    cpf_salvo = context.get("cpf") if context else None
 
-    # Se não houver contexto, pede o CPF ao usuário
-    if not context:
+    # Se a mensagem for um CPF válido e ainda não está salvo, salva no Mem0
+    if user_message and len(user_message) >= 11 and user_message.isdigit() and not cpf_salvo:
+        cpf = user_message
+        # Salva apenas o CPF e marca como cumprimentado
+        novo_contexto = context or {}
+        novo_contexto["cpf"] = cpf
+        novo_contexto["cumprimentado"] = True
+        save_context_mem0(phone, novo_contexto)
+        send_whatsapp_message(phone, "Olá! Dados localizados! Como posso te ajudar?")
+        return jsonify({"status": "cpf_salvo"})
+
+    # Se não houver CPF salvo, pede o CPF ao usuário
+    if not cpf_salvo:
         send_whatsapp_message(phone, "Por favor, me informe seu CPF para localizar seus dados.")
         return jsonify({"status": "aguardando_cpf"})
 
     # Cumprimenta apenas se ainda não cumprimentou nesta sessão
     if context and not context.get("cumprimentado"):
-        nome = context.get("cliente", {}).get("razao_social", "")
-        cumprimento = f"Olá, {nome}! Como posso te ajudar?" if nome else "Olá! Como posso te ajudar?"
         context["cumprimentado"] = True
         save_context_mem0(phone, context)
-        send_whatsapp_message(phone, cumprimento)
+        send_whatsapp_message(phone, "Olá! Como posso te ajudar?")
         return jsonify({"status": "cumprimentado"})
 
     # Aqui segue o fluxo normal, usando o contexto já carregado
+    # Ao identificar intenção, as tools devem buscar dados do IXC em tempo real usando o CPF salvo
     resposta = send_to_mistral(user_message, context)
     console.log(f"[green]Resposta do agente: {resposta}")
     console.log(f"[cyan]Enviando para MegaAPI: to={phone}, text={resposta}")

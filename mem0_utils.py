@@ -17,7 +17,7 @@ def save_context_mem0(user_id, context_dict):
         "user_id": user_id,
         "memory": context_dict
     }
-    response = requests.post(f"{MEM0_API_URL}/set", headers=headers, json=payload)
+    response = requests.post(f"{MEM0_API_URL}/add_memory", headers=headers, json=payload)
     response.raise_for_status()
     return response.json()
 
