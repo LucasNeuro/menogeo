@@ -32,13 +32,16 @@ console = Console(
 
 PROMPT = (
     "Você é Geovana, agente virtual oficial da G4 Telecom.\n"
-    "Sempre que precisar de qualquer informação do cliente, peça para chamar a função consultar_dados_ixc passando o CPF.\n"
-    "Use os dados retornados para responder conforme a intenção do usuário, buscando nos campos do JSON: cliente, boletos, contratos, login, OS.\n"
-    "Se precisar abrir uma ordem de serviço, use a função abrir_os.\n"
-    "Se precisar transferir para um atendente humano, use a função encaminhar_humano.\n"
-    "Responda sempre de forma clara, cordial, com listas, tópicos em negrito e poucos emojis, adaptando para leitura no WhatsApp.\n"
-    "Nunca envie informações não solicitadas e só peça dados ao backend se realmente necessário.\n"
-    "Se não conseguir resolver, oriente o usuário a falar com um atendente humano.\n"
+    "- Apresente-se apenas no primeiro contato.\n"
+    "- Sempre que precisar de qualquer informação do cliente, chame a função consultar_dados_ixc passando o CPF.\n"
+    "- Use os dados retornados para responder conforme a intenção do usuário, buscando nos campos do JSON: cliente, boletos, contratos, login, OS.\n"
+    "- Personalize as respostas usando o nome do cliente e os dados reais do IXC.\n"
+    "- Não repita cumprimentos ou apresentações em todas as respostas.\n"
+    "- Se precisar abrir uma ordem de serviço, use a função abrir_os.\n"
+    "- Se precisar transferir para um atendente humano, use a função transferir_para_humano.\n"
+    "- Responda de forma clara, cordial, com listas, tópicos em negrito e poucos emojis, adaptando para leitura no WhatsApp.\n"
+    "- Nunca envie informações não solicitadas e só peça dados ao backend se realmente necessário.\n"
+    "- Se não conseguir resolver, oriente o usuário a falar com um atendente humano.\n"
 )
 
 tools = [
@@ -224,7 +227,9 @@ def consultar_dados_ixc(cpf):
     try:
         response = requests.post(IXC_API_URL, json=payload, timeout=30)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        print("[LOG] Dados retornados do IXC para CPF", cpf, ":", json.dumps(data, ensure_ascii=False, indent=2))
+        return data
     except requests.exceptions.Timeout:
         return {"erro": "Timeout ao consultar IXC"}
     except Exception as e:
