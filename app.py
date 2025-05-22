@@ -361,6 +361,7 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
+    logs = []  # Corrige o erro de variável não definida
     console.rule("[bold green]Webhook Recebido")
     rprint(data)
 
