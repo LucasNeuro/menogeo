@@ -409,11 +409,11 @@ def webhook():
         print("[LOG] Resposta do Mistral:")
         pprint.pprint(result)
         # Loop para processar tool_calls até o agente não pedir mais nenhuma
-        while "tool_calls" in result and result["tool_calls"]:
-            for tool_call in result["tool_calls"]:
+        while result and "choices" in result and result["choices"] and result["choices"][0]["message"].get("tool_calls"):
+            for tool_call in result["choices"][0]["message"]["tool_calls"]:
                 print("[LOG] Tool call recebida:", tool_call)
-                tool_name = tool_call["name"]
-                args = tool_call["arguments"]
+                tool_name = tool_call["function"]["name"]
+                args = json.loads(tool_call["function"]["arguments"])
                 if tool_name == "consultar_dados_ixc":
                     tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
                 elif tool_name == "consultar_boletos":
@@ -443,6 +443,7 @@ def webhook():
                     "content": json.dumps(tool_result, ensure_ascii=False)
                 })
                 salvar_log(remote_jid, args.get("cpf", phone), f"[LOG] Tool {tool_name} chamada com resultado: {tool_result}")
+            # Nova chamada ao Mistral com o histórico atualizado
             result = call_mistral(messages, tools)
             print("[LOG] Nova resposta do Mistral após tool_call:")
             pprint.pprint(result)
