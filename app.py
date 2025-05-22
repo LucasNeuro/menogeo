@@ -357,15 +357,15 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
             salvar_ixc(remoteJid, message, dados_ixc)
         # Log detalhado
         print(f"[LOG] Dados IXC retornados para CPF {message}: {dados_ixc}")
-        # Adiciona ao histórico como função/tool_call
+        # Adiciona ao histórico como tool_call (role: tool)
         messages.append({
-            "role": "function",
+            "role": "tool",
             "name": "consultar_dados_ixc",
-            "content": json.dumps(dados_ixc)
+            "content": json.dumps(dados_ixc, ensure_ascii=False)
         })
-        # Salva histórico e logs (corrigido para salvar apenas a mensagem individual)
+        # Salva histórico e logs (corrigido para role: tool)
         salvar_historico(remoteJid, message, {"role": "user", "content": message})
-        salvar_historico(remoteJid, message, {"role": "function", "name": "consultar_dados_ixc", "content": json.dumps(dados_ixc)})
+        salvar_historico(remoteJid, message, {"role": "tool", "name": "consultar_dados_ixc", "content": json.dumps(dados_ixc, ensure_ascii=False)})
         salvar_log(remoteJid, message, f"[LOG] Mensagem processada: {message}")
         return True  # Indica que processou CPF
     return False
@@ -438,14 +438,14 @@ def webhook():
                 else:
                     tool_result = {"erro": "Tool não implementada"}
                 print("[LOG] Resultado da tool:", tool_result)
-                # Adiciona o resultado da tool ao histórico como mensagem de função
+                # Adiciona o resultado da tool ao histórico como mensagem de tool_call
                 messages.append({
-                    "role": "function",
+                    "role": "tool",
                     "name": tool_name,
                     "content": json.dumps(tool_result, ensure_ascii=False)
                 })
                 salvar_historico(remote_jid, args.get("cpf", phone), {
-                    "role": "function",
+                    "role": "tool",
                     "name": tool_name,
                     "content": json.dumps(tool_result, ensure_ascii=False)
                 })
