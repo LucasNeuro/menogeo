@@ -23,11 +23,6 @@ console = Console(
     color_system="truecolor",
     style="bold",
     emoji=True, 
-    width=100,
-    height=100,
-    tab_size=4,
-    record=True,
-    markup=True,
 )
 
 def send_to_mistral(user_message):
