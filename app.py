@@ -228,12 +228,26 @@ def webhook():
         cpf = user_message
         try:
             dados_ixc = buscar_dados_ixc(cpf)
+            # Cumprimentar o usuário na primeira mensagem
+            nome = dados_ixc.get("cliente", {}).get("razao_social", "")
+            cumprimento = f"Olá, {nome}! Dados localizados! Como posso te ajudar?" if nome else "Olá! Dados localizados! Como posso te ajudar?"
+            # Marca como cumprimentado no contexto
+            dados_ixc["cumprimentado"] = True
             save_context_mem0(cpf, dados_ixc)
-            send_whatsapp_message(phone, "Dados localizados! Como posso te ajudar?")
+            send_whatsapp_message(phone, cumprimento)
             return jsonify({"status": "contexto_salvo"})
         except Exception as e:
             send_whatsapp_message(phone, "Não consegui localizar seus dados. Por favor, confira o CPF informado.")
             return jsonify({"error": str(e)}), 400
+
+    # Cumprimenta apenas se ainda não cumprimentou nesta sessão
+    if context and not context.get("cumprimentado"):
+        nome = context.get("cliente", {}).get("razao_social", "")
+        cumprimento = f"Olá, {nome}! Como posso te ajudar?" if nome else "Olá! Como posso te ajudar?"
+        context["cumprimentado"] = True
+        save_context_mem0(phone, context)
+        send_whatsapp_message(phone, cumprimento)
+        return jsonify({"status": "cumprimentado"})
 
     # Aqui segue o fluxo normal, usando o contexto já carregado
     resposta = send_to_mistral(user_message, context)
