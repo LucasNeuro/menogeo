@@ -228,6 +228,8 @@ def webhook():
 
     user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
 
+    print(f"[DEBUG] Mensagem recebida do usuário: {user_message}")
+
     # Se a mensagem for um CPF válido, busca dados no IXC_API e salva no Mem0
     if user_message and len(user_message) >= 11 and user_message.isdigit():
         cpf = user_message
