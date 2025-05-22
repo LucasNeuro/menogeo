@@ -141,11 +141,10 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
         if not dados_ixc:
             dados_ixc = consultar_dados_ixc(message)
             salvar_ixc_mem0(remoteJid, message, dados_ixc)
-        # Log detalhado
         print(f"[LOG] Dados IXC retornados para CPF {message}: {dados_ixc}")
-        # Salva histórico e logs
+        # Salva apenas a mensagem do usuário no histórico Mem0AI
         salvar_historico_mem0(remoteJid, message, {"role": "user", "content": message})
-        return True  # Indica que processou CPF
+        return True
     return False
 
 @app.route("/webhook", methods=["POST"])
@@ -176,17 +175,23 @@ def webhook():
             console.log(f"[red]Payload inesperado ou número inválido: {data}")
             return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
-        messages = [
-            {"role": "system", "content": PROMPT},
-            {"role": "user", "content": user_message}
-        ]
+        # Buscar histórico do Mem0AI (apenas user/assistant)
+        historico = buscar_historico_mem0(remote_jid, phone)
+        # Montar contexto para o Mistral
+        messages = [{"role": "system", "content": PROMPT}]
+        if historico:
+            messages.extend(historico)
+        messages.append({"role": "user", "content": user_message})
         print("\n[LOG] Enviando para Mistral:")
         pprint.pprint(messages)
 
-        cpf_processado = processar_mensagem_usuario(remote_jid, user_message, messages, logs)
+        # Salvar mensagem do usuário no Mem0AI
+        salvar_historico_mem0(remote_jid, phone, {"role": "user", "content": user_message})
+
         result = call_mistral(messages, tools)
         print("[LOG] Resposta do Mistral:")
         pprint.pprint(result)
+        # Loop para processar tool_calls
         while result and "choices" in result and result["choices"] and result["choices"][0]["message"].get("tool_calls"):
             for tool_call in result["choices"][0]["message"]["tool_calls"]:
                 print("[LOG] Tool call recebida:", tool_call)
@@ -209,19 +214,20 @@ def webhook():
                 else:
                     tool_result = {"erro": "Tool não implementada"}
                 print("[LOG] Resultado da tool:", tool_result)
+                # Adiciona o resultado da tool apenas ao contexto da conversa
                 messages.append({
                     "role": "tool",
                     "name": tool_name,
                     "content": json.dumps(tool_result, ensure_ascii=False)
                 })
-                salvar_historico_mem0(remote_jid, args.get("cpf", phone), {
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": json.dumps(tool_result, ensure_ascii=False)
-                })
+            # Nova chamada ao Mistral com o contexto atualizado
             result = call_mistral(messages, tools)
             print("[LOG] Nova resposta do Mistral após tool_call:")
             pprint.pprint(result)
+            # Se houver resposta do assistente, salva no Mem0AI
+            if result and "choices" in result and result["choices"] and result["choices"][0]["message"]["role"] == "assistant":
+                resposta_assistente = result["choices"][0]["message"]["content"]
+                salvar_historico_mem0(remote_jid, phone, {"role": "assistant", "content": resposta_assistente})
         print("[LOG] Resposta final do agente:", result)
         final_response = None
         if result and "choices" in result and result["choices"]:
