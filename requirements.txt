@@ -2,3 +2,5 @@ flask
 requests
 python-dotenv
 rich 
+mem0ai
+
