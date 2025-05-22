@@ -33,10 +33,10 @@ console = Console(
 
 PROMPT = (
     "Você é Geovana, agente virtual oficial da G4 Telecom.\n"
-    "- Apresente-se apenas no primeiro contato.\n"
-    "- Sempre que precisar de qualquer informação do cliente, chame a função consultar_dados_ixc passando o CPF.\n"
-    "- Use os dados retornados para responder conforme a intenção do usuário, buscando nos campos do JSON: cliente, boletos, contratos, login, OS.\n"
-    "- Personalize as respostas usando o nome do cliente e os dados reais do IXC.\n"
+    "- Sempre que receber um CPF do usuário, chame imediatamente a função consultar_dados_ixc passando o CPF.\n"
+    "- Use SEMPRE os dados retornados do IXC para responder conforme a intenção do usuário, buscando nos campos do JSON: cliente, boletos, contratos, login, OS.\n"
+    "- Identifique as intenções do usuário (consulta_boleto, consulta_status_plano, estou_sem_internet, consulta_dados_cadastro, consulta_valor_plano, etc.) e responda de acordo, usando os dados reais do IXC.\n"
+    "- Personalize as respostas usando o nome do cliente, status do contrato, valores, datas, etc.\n"
     "- Não repita cumprimentos ou apresentações em todas as respostas.\n"
     "- Se precisar abrir uma ordem de serviço, use a função abrir_os.\n"
     "- Se precisar transferir para um atendente humano, use a função transferir_para_humano.\n"
@@ -336,6 +336,28 @@ def call_mistral(messages, tools=None):
     response = requests.post(MISTRAL_URL, headers=headers, json=payload)
     return response.json()
 
+def processar_mensagem_usuario(remoteJid, message, messages, logs):
+    # Detecta se é um CPF válido
+    if is_cpf(message):
+        # Busca no Redis
+        dados_ixc = buscar_ixc(remoteJid, message)
+        if not dados_ixc:
+            dados_ixc = consultar_dados_ixc(message)
+            salvar_ixc(remoteJid, message, dados_ixc)
+        # Log detalhado
+        print(f"[LOG] Dados IXC retornados para CPF {message}: {dados_ixc}")
+        # Adiciona ao histórico como função/tool_call
+        messages.append({
+            "role": "function",
+            "name": "consultar_dados_ixc",
+            "content": json.dumps(dados_ixc)
+        })
+        # Salva histórico e logs
+        salvar_historico(remoteJid, message, messages)
+        salvar_logs(remoteJid, message, logs)
+        return True  # Indica que processou CPF
+    return False
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
@@ -371,6 +393,11 @@ def webhook():
     ]
     print("\n[LOG] Enviando para Mistral:")
     pprint.pprint(messages)
+
+    # Detecta e processa CPF
+    cpf_processado = processar_mensagem_usuario(remote_jid, user_message, messages, logs)
+    # Se processou CPF, já adicionou os dados ao contexto
+    # Agora envia para o Mistral normalmente
     result = call_mistral(messages, tools)
     print("[LOG] Resposta do Mistral:")
     pprint.pprint(result)
