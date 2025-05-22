@@ -330,8 +330,6 @@ def webhook():
                 tool_result = transferir_para_humano(args["cpf"], args["resumo"])
             elif tool_name == "abrir_os":
                 tool_result = abrir_os(args["id_cliente"], args["motivo"])
-            elif tool_name == "encaminhar_humano":
-                tool_result = encaminhar_humano(args["id_cliente"], args["resumo"])
             else:
                 tool_result = {"erro": "Tool não implementada"}
             print("[LOG] Resultado da tool:", tool_result)
