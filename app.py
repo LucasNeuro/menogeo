@@ -43,6 +43,12 @@ PROMPT = (
     "- Responda de forma clara, cordial, com listas, tópicos em negrito e poucos emojis, adaptando para leitura no WhatsApp.\n"
     "- Nunca envie informações não solicitadas e só peça dados ao backend se realmente necessário.\n"
     "- Se não conseguir resolver, oriente o usuário a falar com um atendente humano.\n"
+    "\n"
+    "Exemplos de respostas personalizadas usando dados do IXC:\n"
+    "- Para consulta de boleto: 'Olá, {nome_cliente}! Seu boleto de R$ {valor} vence em {data_vencimento}. Segue o link para pagamento: {url_pdf}. Se precisar do código de barras: {linha_digitavel}'\n"
+    "- Para status do plano: 'Seu plano está {status_contrato} e sua internet está {status_internet}. Última conexão: {ultima_conexao_inicial}. Se precisar de suporte, posso abrir uma ordem de serviço.'\n"
+    "- Para consulta de cadastro: 'Seus dados cadastrais: Nome: {nome_cliente}, Telefone: {telefone}, Endereço: {endereco}, Status: {status}'\n"
+    "- Sempre use os dados reais do IXC para responder, nunca invente informações.\n"
 )
 
 tools = [
@@ -359,96 +365,100 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs):
         })
         # Salva histórico e logs
         salvar_historico(remoteJid, message, messages)
-        salvar_logs(remoteJid, message, logs)
+        salvar_log(remoteJid, message, logs)
         return True  # Indica que processou CPF
     return False
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.json
-    logs = []  # Corrige o erro de variável não definida
-    console.rule("[bold green]Webhook Recebido")
-    rprint(data)
+    try:
+        data = request.json
+        logs = []  # Corrige o erro de variável não definida
+        console.rule("[bold green]Webhook Recebido")
+        rprint(data)
 
-    # Ignora mensagens enviadas pelo próprio bot, grupo ou broadcast
-    if data.get("fromMe") or data.get("key", {}).get("fromMe") or data.get("isGroup") or data.get("broadcast"):
-        console.log("[yellow] Ignorando mensagem enviada pelo próprio bot, grupo ou broadcast.")
-        return jsonify({"status": "ignored"})
+        # Ignora mensagens enviadas pelo próprio bot, grupo ou broadcast
+        if data.get("fromMe") or data.get("key", {}).get("fromMe") or data.get("isGroup") or data.get("broadcast"):
+            console.log("[yellow] Ignorando mensagem enviada pelo próprio bot, grupo ou broadcast.")
+            return jsonify({"status": "ignored"})
 
-    # Extrai o número do usuário (remoteJid)
-    remote_jid = data.get("remoteJid") or data.get("key", {}).get("remoteJid")
-    phone = None
-    if remote_jid:
-        phone_original = remote_jid
-        phone = remote_jid.split("@")[0]
-        phone = "".join(filter(str.isdigit, phone))
-        console.log(f"[yellow]Telefone original: {phone_original} | Telefone extraído: {phone}")
-    else:
-        console.log(f"[red]Campo 'remoteJid' não encontrado no payload!")
+        # Extrai o número do usuário (remoteJid)
+        remote_jid = data.get("remoteJid") or data.get("key", {}).get("remoteJid")
+        phone = None
+        if remote_jid:
+            phone_original = remote_jid
+            phone = remote_jid.split("@")[0]
+            phone = "".join(filter(str.isdigit, phone))
+            console.log(f"[yellow]Telefone original: {phone_original} | Telefone extraído: {phone}")
+        else:
+            console.log(f"[red]Campo 'remoteJid' não encontrado no payload!")
 
-    user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
+        user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
 
-    # Validação adicional do número (mínimo 10 dígitos)
-    if not phone or not user_message or len(phone) < 10:
-        console.log(f"[red]Payload inesperado ou número inválido: {data}")
-        return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
+        # Validação adicional do número (mínimo 10 dígitos)
+        if not phone or not user_message or len(phone) < 10:
+            console.log(f"[red]Payload inesperado ou número inválido: {data}")
+            return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
-    messages = [
-        {"role": "system", "content": PROMPT},
-        {"role": "user", "content": user_message}
-    ]
-    print("\n[LOG] Enviando para Mistral:")
-    pprint.pprint(messages)
+        messages = [
+            {"role": "system", "content": PROMPT},
+            {"role": "user", "content": user_message}
+        ]
+        print("\n[LOG] Enviando para Mistral:")
+        pprint.pprint(messages)
 
-    # Detecta e processa CPF
-    cpf_processado = processar_mensagem_usuario(remote_jid, user_message, messages, logs)
-    # Se processou CPF, já adicionou os dados ao contexto
-    # Agora envia para o Mistral normalmente
-    result = call_mistral(messages, tools)
-    print("[LOG] Resposta do Mistral:")
-    pprint.pprint(result)
-    # Loop para processar tool_calls até o agente não pedir mais nenhuma
-    while "tool_calls" in result and result["tool_calls"]:
-        for tool_call in result["tool_calls"]:
-            print("[LOG] Tool call recebida:", tool_call)
-            tool_name = tool_call["name"]
-            args = tool_call["arguments"]
-            if tool_name == "consultar_dados_ixc":
-                tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
-            elif tool_name == "consultar_boletos":
-                tool_result = consultar_boletos_ixc(args["cpf"])
-            elif tool_name == "consultar_status_plano":
-                tool_result = consultar_status_plano_ixc(args["cpf"])
-            elif tool_name == "consultar_dados_cadastro":
-                tool_result = consultar_dados_cadastro_ixc(args["cpf"])
-            elif tool_name == "consultar_valor_plano":
-                tool_result = consultar_valor_plano_ixc(args["cpf"])
-            elif tool_name == "transferir_para_humano":
-                tool_result = transferir_para_humano(args["cpf"], args["resumo"])
-            elif tool_name == "abrir_os":
-                tool_result = abrir_os(args["id_cliente"], args["motivo"])
-            else:
-                tool_result = {"erro": "Tool não implementada"}
-            print("[LOG] Resultado da tool:", tool_result)
-            # Adiciona o resultado da tool ao histórico como mensagem de função
-            messages.append({
-                "role": "function",
-                "name": tool_name,
-                "content": json.dumps(tool_result)
-            })
-            salvar_historico(remote_jid, args["cpf"], {"role": "function", "name": tool_name, "content": tool_result})
-            salvar_log(remote_jid, args["cpf"], f"[LOG] Tool {tool_name} chamada com resultado: {tool_result}")
+        # Detecta e processa CPF
+        cpf_processado = processar_mensagem_usuario(remote_jid, user_message, messages, logs)
+        # Se processou CPF, já adicionou os dados ao contexto
+        # Agora envia para o Mistral normalmente
         result = call_mistral(messages, tools)
-        print("[LOG] Nova resposta do Mistral após tool_call:")
+        print("[LOG] Resposta do Mistral:")
         pprint.pprint(result)
-    print("[LOG] Resposta final do agente:", result)
-    # Extrai a resposta final do Mistral
-    final_response = None
-    if result and "choices" in result and result["choices"]:
-        final_response = result["choices"][0]["message"]["content"]
-    if final_response:
-        send_whatsapp_message(phone, final_response)
-    return jsonify(result)
+        # Loop para processar tool_calls até o agente não pedir mais nenhuma
+        while "tool_calls" in result and result["tool_calls"]:
+            for tool_call in result["tool_calls"]:
+                print("[LOG] Tool call recebida:", tool_call)
+                tool_name = tool_call["name"]
+                args = tool_call["arguments"]
+                if tool_name == "consultar_dados_ixc":
+                    tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
+                elif tool_name == "consultar_boletos":
+                    tool_result = consultar_boletos_ixc(args["cpf"])
+                elif tool_name == "consultar_status_plano":
+                    tool_result = consultar_status_plano_ixc(args["cpf"])
+                elif tool_name == "consultar_dados_cadastro":
+                    tool_result = consultar_dados_cadastro_ixc(args["cpf"])
+                elif tool_name == "consultar_valor_plano":
+                    tool_result = consultar_valor_plano_ixc(args["cpf"])
+                elif tool_name == "transferir_para_humano":
+                    tool_result = transferir_para_humano(args["cpf"], args["resumo"])
+                elif tool_name == "abrir_os":
+                    tool_result = abrir_os(args["id_cliente"], args["motivo"])
+                else:
+                    tool_result = {"erro": "Tool não implementada"}
+                print("[LOG] Resultado da tool:", tool_result)
+                # Adiciona o resultado da tool ao histórico como mensagem de função
+                messages.append({
+                    "role": "function",
+                    "name": tool_name,
+                    "content": json.dumps(tool_result)
+                })
+                salvar_historico(remote_jid, args.get("cpf", phone), {"role": "function", "name": tool_name, "content": tool_result})
+                salvar_log(remote_jid, args.get("cpf", phone), f"[LOG] Tool {tool_name} chamada com resultado: {tool_result}")
+            result = call_mistral(messages, tools)
+            print("[LOG] Nova resposta do Mistral após tool_call:")
+            pprint.pprint(result)
+        print("[LOG] Resposta final do agente:", result)
+        # Extrai a resposta final do Mistral
+        final_response = None
+        if result and "choices" in result and result["choices"]:
+            final_response = result["choices"][0]["message"]["content"]
+        if final_response:
+            send_whatsapp_message(phone, final_response)
+        return jsonify(result)
+    except Exception as e:
+        console.log(f"[red]Erro inesperado no webhook: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # Nova tool: consultar_boletos
 
