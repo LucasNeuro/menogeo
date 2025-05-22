@@ -1,4 +1,5 @@
 import os
+from mem0 import MemoryClient
 import requests
 import time
 from flask import Flask, request, jsonify
@@ -7,7 +8,6 @@ from rich import print as rprint
 from rich.console import Console
 import pprint
 import json
-import redis
 
 load_dotenv()
 
@@ -126,58 +126,112 @@ tools = [
     }
 ]
 
-# Configuração do Redis via .env
-REDIS_HOST = os.getenv("REDIS_HOST")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-REDIS_USERNAME = os.getenv("REDIS_USERNAME", None)
-REDIS_DB = int(os.getenv("REDIS_DB", 0))
-REDIS_TTL = int(os.getenv("REDIS_TTL", 1800))  # 30 minutos padrão
-
-redis_client = redis.StrictRedis(
-    host=REDIS_HOST,
-    port=REDIS_PORT,
-    password=REDIS_PASSWORD,
-    username=REDIS_USERNAME,
-    db=REDIS_DB,
-    decode_responses=True
-)
+# Configuração do Mem0AI
+os.environ["MEM0_API_KEY"] = os.getenv("MEM0_API_KEY")
+mem0_client = MemoryClient()
 
 def get_namespace(remoteJid, cpf):
     return f"conversa:{remoteJid}:{cpf}:"
 
-# Função para salvar dados do IXC com TTL
-def salvar_ixc(remoteJid, cpf, dados_ixc):
-    key = get_namespace(remoteJid, cpf) + "ixc"
-    redis_client.setex(key, REDIS_TTL, json.dumps(dados_ixc))
-    salvar_log(remoteJid, cpf, f"[LOG] Dados IXC salvos no cache: {json.dumps(dados_ixc, ensure_ascii=False)}")
+def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
+    # Detecta se é um CPF válido
+    if is_cpf(message):
+        # Busca no Mem0AI
+        dados_ixc = buscar_ixc_mem0(remoteJid, message)
+        if not dados_ixc:
+            dados_ixc = consultar_dados_ixc(message)
+            salvar_ixc_mem0(remoteJid, message, dados_ixc)
+        # Log detalhado
+        print(f"[LOG] Dados IXC retornados para CPF {message}: {dados_ixc}")
+        # Salva histórico e logs
+        salvar_historico_mem0(remoteJid, message, {"role": "user", "content": message})
+        return True  # Indica que processou CPF
+    return False
 
-def buscar_ixc(remoteJid, cpf):
-    key = get_namespace(remoteJid, cpf) + "ixc"
-    valor = redis_client.get(key)
-    if valor:
-        salvar_log(remoteJid, cpf, f"[LOG] Dados IXC recuperados do cache.")
-        return json.loads(valor)
-    return None
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    try:
+        data = request.json
+        logs = []
+        console.rule("[bold green]Webhook Recebido")
+        rprint(data)
 
-# Função para salvar histórico da conversa (append)
-def salvar_historico(remoteJid, cpf, mensagem):
-    key = get_namespace(remoteJid, cpf) + "historico"
-    redis_client.rpush(key, json.dumps(mensagem))
-    salvar_log(remoteJid, cpf, f"[LOG] Mensagem adicionada ao histórico: {json.dumps(mensagem, ensure_ascii=False)}")
+        if data.get("fromMe") or data.get("key", {}).get("fromMe") or data.get("isGroup") or data.get("broadcast"):
+            console.log("[yellow] Ignorando mensagem enviada pelo próprio bot, grupo ou broadcast.")
+            return jsonify({"status": "ignored"})
 
-def buscar_historico(remoteJid, cpf):
-    key = get_namespace(remoteJid, cpf) + "historico"
-    return [json.loads(m) for m in redis_client.lrange(key, 0, -1)]
+        remote_jid = data.get("remoteJid") or data.get("key", {}).get("remoteJid")
+        phone = None
+        if remote_jid:
+            phone_original = remote_jid
+            phone = remote_jid.split("@")[0]
+            phone = "".join(filter(str.isdigit, phone))
+            console.log(f"[yellow]Telefone original: {phone_original} | Telefone extraído: {phone}")
+        else:
+            console.log(f"[red]Campo 'remoteJid' não encontrado no payload!")
 
-# Função para salvar logs (append)
-def salvar_log(remoteJid, cpf, log):
-    key = get_namespace(remoteJid, cpf) + "logs"
-    redis_client.rpush(key, log)
+        user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
 
-def buscar_logs(remoteJid, cpf):
-    key = get_namespace(remoteJid, cpf) + "logs"
-    return redis_client.lrange(key, 0, -1)
+        if not phone or not user_message or len(phone) < 10:
+            console.log(f"[red]Payload inesperado ou número inválido: {data}")
+            return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
+
+        messages = [
+            {"role": "system", "content": PROMPT},
+            {"role": "user", "content": user_message}
+        ]
+        print("\n[LOG] Enviando para Mistral:")
+        pprint.pprint(messages)
+
+        cpf_processado = processar_mensagem_usuario(remote_jid, user_message, messages, logs)
+        result = call_mistral(messages, tools)
+        print("[LOG] Resposta do Mistral:")
+        pprint.pprint(result)
+        while result and "choices" in result and result["choices"] and result["choices"][0]["message"].get("tool_calls"):
+            for tool_call in result["choices"][0]["message"]["tool_calls"]:
+                print("[LOG] Tool call recebida:", tool_call)
+                tool_name = tool_call["function"]["name"]
+                args = json.loads(tool_call["function"]["arguments"])
+                if tool_name == "consultar_dados_ixc":
+                    tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
+                elif tool_name == "consultar_boletos":
+                    tool_result = consultar_boletos_ixc(args["cpf"])
+                elif tool_name == "consultar_status_plano":
+                    tool_result = consultar_status_plano_ixc(args["cpf"])
+                elif tool_name == "consultar_dados_cadastro":
+                    tool_result = consultar_dados_cadastro_ixc(args["cpf"])
+                elif tool_name == "consultar_valor_plano":
+                    tool_result = consultar_valor_plano_ixc(args["cpf"])
+                elif tool_name == "transferir_para_humano":
+                    tool_result = transferir_para_humano(args["cpf"], args["resumo"])
+                elif tool_name == "abrir_os":
+                    tool_result = abrir_os(args["id_cliente"], args["motivo"])
+                else:
+                    tool_result = {"erro": "Tool não implementada"}
+                print("[LOG] Resultado da tool:", tool_result)
+                messages.append({
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": json.dumps(tool_result, ensure_ascii=False)
+                })
+                salvar_historico_mem0(remote_jid, args.get("cpf", phone), {
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": json.dumps(tool_result, ensure_ascii=False)
+                })
+            result = call_mistral(messages, tools)
+            print("[LOG] Nova resposta do Mistral após tool_call:")
+            pprint.pprint(result)
+        print("[LOG] Resposta final do agente:", result)
+        final_response = None
+        if result and "choices" in result and result["choices"]:
+            final_response = result["choices"][0]["message"]["content"]
+        if final_response:
+            send_whatsapp_message(phone, final_response)
+        return jsonify(result)
+    except Exception as e:
+        console.log(f"[red]Erro inesperado no webhook: {e}")
+        return jsonify({"error": str(e)}), 500
 
 def send_to_mistral(user_message):
     url = "https://api.mistral.ai/v1/agents/completions"
@@ -237,16 +291,12 @@ def send_whatsapp_message(phone, message, max_retries=3, timeout=10):
                 raise
             time.sleep(2)  # Espera 2 segundos antes de tentar novamente
 
-# Função para validar CPF
-
 def validar_cpf(cpf):
     payload = {"cpf": cpf}
     url = f"{IXC_API_URL}/validarCpf"
     response = requests.post(url, json=payload, timeout=10)
     response.raise_for_status()
     return response.json()
-
-# Função para consultar cliente
 
 def consultar_cliente(cpf):
     payload = {"cpf": cpf}
@@ -255,8 +305,6 @@ def consultar_cliente(cpf):
     response.raise_for_status()
     return response.json()
 
-# Função para consultar contratos ativos
-
 def consultar_contratos(id_cliente):
     payload = {"id_cliente": id_cliente}
     url = f"{IXC_API_URL}/consultarContratos"
@@ -264,16 +312,12 @@ def consultar_contratos(id_cliente):
     response.raise_for_status()
     return response.json()
 
-# Função para consultar boletos
-
 def consultar_boletos(id_cliente):
     payload = {"id_cliente": id_cliente}
     url = f"{IXC_API_URL}/consultarBoletos"
     response = requests.post(url, json=payload, timeout=10)
     response.raise_for_status()
     return response.json()
-
-# Função para consultar status do plano
 
 def consultar_status_plano(id_cliente):
     payload = {"id_cliente": id_cliente}
@@ -284,7 +328,7 @@ def consultar_status_plano(id_cliente):
 
 def consultar_dados_ixc(cpf, remoteJid=None):
     if remoteJid:
-        cache = buscar_ixc(remoteJid, cpf)
+        cache = buscar_ixc_mem0(remoteJid, cpf)
         if cache:
             print(f"[LOG] Usando dados do IXC do cache para CPF {cpf}")
             return cache
@@ -295,7 +339,7 @@ def consultar_dados_ixc(cpf, remoteJid=None):
         data = response.json()
         print("[LOG] Dados retornados do IXC para CPF", cpf, ":", json.dumps(data, ensure_ascii=False, indent=2))
         if remoteJid:
-            salvar_ixc(remoteJid, cpf, data)
+            salvar_ixc_mem0(remoteJid, cpf, data)
         return data
     except requests.exceptions.Timeout:
         return {"erro": "Timeout ao consultar IXC"}
@@ -347,186 +391,29 @@ def call_mistral(messages, tools=None):
 def is_cpf(text):
     return isinstance(text, str) and text.isdigit() and len(text) == 11
 
-def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
-    # Detecta se é um CPF válido
-    if is_cpf(message):
-        # Busca no Redis
-        dados_ixc = buscar_ixc(remoteJid, message)
-        if not dados_ixc:
-            dados_ixc = consultar_dados_ixc(message)
-            salvar_ixc(remoteJid, message, dados_ixc)
-        # Log detalhado
-        print(f"[LOG] Dados IXC retornados para CPF {message}: {dados_ixc}")
-        # Salva histórico e logs
-        salvar_historico(remoteJid, message, {"role": "user", "content": message})
-        salvar_log(remoteJid, message, f"[LOG] Mensagem processada: {message}")
-        return True  # Indica que processou CPF
-    return False
+def salvar_historico_mem0(remoteJid, cpf, mensagem):
+    user_id = f"{remoteJid}:{cpf}"
+    mem0_client.add([mensagem], user_id=user_id, agent_id="geovana")
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        data = request.json
-        logs = []  # Corrige o erro de variável não definida
-        console.rule("[bold green]Webhook Recebido")
-        rprint(data)
+def buscar_historico_mem0(remoteJid, cpf, page=1, page_size=50):
+    user_id = f"{remoteJid}:{cpf}"
+    return mem0_client.get_all(user_id=user_id, page=page, page_size=page_size)
 
-        # Ignora mensagens enviadas pelo próprio bot, grupo ou broadcast
-        if data.get("fromMe") or data.get("key", {}).get("fromMe") or data.get("isGroup") or data.get("broadcast"):
-            console.log("[yellow] Ignorando mensagem enviada pelo próprio bot, grupo ou broadcast.")
-            return jsonify({"status": "ignored"})
+def salvar_ixc_mem0(remoteJid, cpf, dados_ixc):
+    user_id = f"{remoteJid}:{cpf}"
+    mem0_client.add([{
+        "role": "tool",
+        "name": "consultar_dados_ixc",
+        "content": json.dumps(dados_ixc, ensure_ascii=False)
+    }], user_id=user_id, agent_id="geovana")
 
-        # Extrai o número do usuário (remoteJid)
-        remote_jid = data.get("remoteJid") or data.get("key", {}).get("remoteJid")
-        phone = None
-        if remote_jid:
-            phone_original = remote_jid
-            phone = remote_jid.split("@")[0]
-            phone = "".join(filter(str.isdigit, phone))
-            console.log(f"[yellow]Telefone original: {phone_original} | Telefone extraído: {phone}")
-        else:
-            console.log(f"[red]Campo 'remoteJid' não encontrado no payload!")
-
-        user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
-
-        # Validação adicional do número (mínimo 10 dígitos)
-        if not phone or not user_message or len(phone) < 10:
-            console.log(f"[red]Payload inesperado ou número inválido: {data}")
-            return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
-
-        messages = [
-            {"role": "system", "content": PROMPT},
-            {"role": "user", "content": user_message}
-        ]
-        print("\n[LOG] Enviando para Mistral:")
-        pprint.pprint(messages)
-
-        # Detecta e processa CPF
-        cpf_processado = processar_mensagem_usuario(remote_jid, user_message, messages, logs)
-        # Se processou CPF, já adicionou os dados ao contexto
-        # Agora envia para o Mistral normalmente
-        result = call_mistral(messages, tools)
-        print("[LOG] Resposta do Mistral:")
-        pprint.pprint(result)
-        # Loop para processar tool_calls até o agente não pedir mais nenhuma
-        while result and "choices" in result and result["choices"] and result["choices"][0]["message"].get("tool_calls"):
-            for tool_call in result["choices"][0]["message"]["tool_calls"]:
-                print("[LOG] Tool call recebida:", tool_call)
-                tool_name = tool_call["function"]["name"]
-                args = json.loads(tool_call["function"]["arguments"])
-                if tool_name == "consultar_dados_ixc":
-                    tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
-                elif tool_name == "consultar_boletos":
-                    tool_result = consultar_boletos_ixc(args["cpf"])
-                elif tool_name == "consultar_status_plano":
-                    tool_result = consultar_status_plano_ixc(args["cpf"])
-                elif tool_name == "consultar_dados_cadastro":
-                    tool_result = consultar_dados_cadastro_ixc(args["cpf"])
-                elif tool_name == "consultar_valor_plano":
-                    tool_result = consultar_valor_plano_ixc(args["cpf"])
-                elif tool_name == "transferir_para_humano":
-                    tool_result = transferir_para_humano(args["cpf"], args["resumo"])
-                elif tool_name == "abrir_os":
-                    tool_result = abrir_os(args["id_cliente"], args["motivo"])
-                else:
-                    tool_result = {"erro": "Tool não implementada"}
-                print("[LOG] Resultado da tool:", tool_result)
-                # Adiciona o resultado da tool ao histórico como mensagem de tool_call
-                messages.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": json.dumps(tool_result, ensure_ascii=False)
-                })
-                salvar_historico(remote_jid, args.get("cpf", phone), {
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": json.dumps(tool_result, ensure_ascii=False)
-                })
-                salvar_log(remote_jid, args.get("cpf", phone), f"[LOG] Tool {tool_name} chamada com resultado: {tool_result}")
-            # Nova chamada ao Mistral com o histórico atualizado
-            result = call_mistral(messages, tools)
-            print("[LOG] Nova resposta do Mistral após tool_call:")
-            pprint.pprint(result)
-        print("[LOG] Resposta final do agente:", result)
-        # Extrai a resposta final do Mistral
-        final_response = None
-        if result and "choices" in result and result["choices"]:
-            final_response = result["choices"][0]["message"]["content"]
-        if final_response:
-            send_whatsapp_message(phone, final_response)
-        return jsonify(result)
-    except Exception as e:
-        console.log(f"[red]Erro inesperado no webhook: {e}")
-        return jsonify({"error": str(e)}), 500
-
-# Nova tool: consultar_boletos
-
-def consultar_boletos_ixc(cpf):
-    payload = {"cpf": cpf}
-    try:
-        response = requests.post(f"{IXC_API_URL}/consultarBoletos", json=payload, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.Timeout:
-        return {"erro": "Timeout ao consultar boletos"}
-    except Exception as e:
-        return {"erro": str(e)}
-
-# Nova tool: consultar_status_plano
-
-def consultar_status_plano_ixc(cpf):
-    payload = {"cpf": cpf}
-    try:
-        response = requests.post(f"{IXC_API_URL}/consultarStatusPlano", json=payload, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.Timeout:
-        return {"erro": "Timeout ao consultar status do plano"}
-    except Exception as e:
-        return {"erro": str(e)}
-
-# Nova tool: consultar_dados_cadastro
-
-def consultar_dados_cadastro_ixc(cpf):
-    payload = {"cpf": cpf}
-    try:
-        response = requests.post(f"{IXC_API_URL}/consultarDadosCadastro", json=payload, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.Timeout:
-        return {"erro": "Timeout ao consultar dados cadastrais"}
-    except Exception as e:
-        return {"erro": str(e)}
-
-# Nova tool: consultar_valor_plano
-
-def consultar_valor_plano_ixc(cpf):
-    payload = {"cpf": cpf}
-    try:
-        response = requests.post(f"{IXC_API_URL}/consultarValorPlano", json=payload, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.Timeout:
-        return {"erro": "Timeout ao consultar valor do plano"}
-    except Exception as e:
-        return {"erro": str(e)}
-
-# Nova tool: transferir_para_humano
-
-def transferir_para_humano(cpf, resumo):
-    payload = {
-        "cpf": cpf,
-        "resumo": resumo
-    }
-    webhook_url = os.getenv("MAKE_WEBHOOK_URL")
-    try:
-        response = requests.post(webhook_url, json=payload, timeout=30)
-        response.raise_for_status()
-        return {"status": "ok", "mensagem": "Transferência para humano solicitada."}
-    except requests.exceptions.Timeout:
-        return {"erro": "Timeout ao transferir para humano"}
-    except Exception as e:
-        return {"erro": str(e)}
+def buscar_ixc_mem0(remoteJid, cpf):
+    user_id = f"{remoteJid}:{cpf}"
+    memories = mem0_client.search("consultar_dados_ixc", user_id=user_id)
+    if memories:
+        # Retorna o conteúdo mais recente
+        return json.loads(memories[0]["content"])
+    return None
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
