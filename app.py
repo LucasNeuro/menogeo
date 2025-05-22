@@ -53,10 +53,9 @@ def send_whatsapp_message(phone, message):
         "Authorization": f"Bearer {MEGAAPI_KEY}",
         "Content-Type": "application/json"
     }
-    # Ensure phone number is properly formatted with @s.whatsapp.net
-    formatted_phone = f"{phone}@s.whatsapp.net" if not "@" in phone else phone
+    # Enviar apenas o número puro, conforme documentação da MegaAPI
     payload = {
-        "to": formatted_phone,
+        "to": phone,  # Exemplo: "5511970364501"
         "text": message
     }
     console.log(f"[cyan]Enviando requisição para MegaAPI: {payload}")
