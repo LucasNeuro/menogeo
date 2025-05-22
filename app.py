@@ -411,7 +411,7 @@ def transferir_para_humano(cpf, resumo):
         "cpf": cpf,
         "resumo": resumo
     }
-    webhook_url = "https://hook.us2.make.com/f1x53952bxirumz2gnfpoabdo397uws2"
+    webhook_url = os.getenv("MAKE_WEBHOOK_URL")
     try:
         response = requests.post(webhook_url, json=payload, timeout=30)
         response.raise_for_status()
