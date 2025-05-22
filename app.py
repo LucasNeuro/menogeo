@@ -72,25 +72,30 @@ def webhook():
     console.rule("[bold green]Webhook Recebido")
     rprint(data)
 
-    # Extrai o número do usuário (remoteJid) para enviar a resposta
-    phone = data.get("key", {}).get("remoteJid")
-    if phone:
-        phone_original = phone
-        phone = phone.split("@")[0]
+    # Ignora mensagens enviadas pelo próprio bot, grupo ou broadcast
+    if data.get("fromMe") or data.get("key", {}).get("fromMe") or data.get("isGroup") or data.get("broadcast"):
+        console.log("[yellow] Ignorando mensagem enviada pelo próprio bot, grupo ou broadcast.")
+        return jsonify({"status": "ignored"})
+
+    # Extrai o número do usuário (remoteJid)
+    remote_jid = data.get("remoteJid") or data.get("key", {}).get("remoteJid")
+    phone = None
+    if remote_jid:
+        phone_original = remote_jid
+        phone = remote_jid.split("@")[0]
         phone = "".join(filter(str.isdigit, phone))
         console.log(f"[yellow]Telefone original: {phone_original} | Telefone extraído: {phone}")
     else:
         console.log(f"[red]Campo 'remoteJid' não encontrado no payload!")
+
     user_message = data.get("message", {}).get("extendedTextMessage", {}).get("text")
 
     if not phone or not user_message:
         console.log(f"[red]Payload inesperado: {data}")
         return jsonify({"error": "Payload inesperado", "payload": data}), 400
 
-    # 1. Envia mensagem para o agente Mistral
     resposta = send_to_mistral(user_message)
     console.log(f"[green]Resposta do agente: {resposta}")
-    # 2. Responde no WhatsApp via MegaAPI
     console.log(f"[cyan]Enviando para MegaAPI: to={phone}, text={resposta}")
     send_whatsapp_message(phone, resposta)
     return jsonify({"status": "ok"})
