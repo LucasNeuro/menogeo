@@ -16,15 +16,63 @@ INSTANCE_KEY = os.getenv("INSTANCE_KEY")
 # Mistral credentials
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 MISTRAL_AGENT_ID = os.getenv("MISTRAL_AGENT_ID")
+MISTRAL_URL = "https://api.mistral.ai/v1/agents/completions"
+
+IXC_API_URL = os.getenv("IXC_API_URL", "https://n8n.rafaeltoshiba.com.br/webhook/ixc/consultaCliente")
 
 app = Flask(__name__)
-
 
 console = Console(
     color_system="truecolor",
     style="bold",
     emoji=True, 
 )
+
+PROMPT = """
+Você é Geovana, agente virtual oficial da G4 Telecom.
+Sempre que precisar de qualquer informação do cliente, peça para chamar a função consultar_dados_ixc passando o CPF.
+Use os dados retornados para responder conforme a intenção do usuário, buscando nos campos do JSON: cliente, boletos, contratos, login, OS.
+Se precisar abrir uma ordem de serviço, use a função abrir_os.
+Se precisar transferir para um atendente humano, use a função encaminhar_humano.
+Responda sempre de forma clara, cordial, com listas, tópicos em negrito e poucos emojis, adaptando para leitura no WhatsApp.
+Nunca envie informações não solicitadas e só peça dados ao backend se realmente necessário.
+Se não conseguir resolver, oriente o usuário a falar com um atendente humano.
+"""
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_dados_ixc",
+            "description": "Consulta todos os dados do cliente no IXC a partir do CPF.",
+            "parameters": {
+                "cpf": {"type": "string", "description": "CPF do cliente"}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "abrir_os",
+            "description": "Abre uma ordem de serviço para o cliente.",
+            "parameters": {
+                "id_cliente": {"type": "string", "description": "ID do cliente"},
+                "motivo": {"type": "string", "description": "Motivo da OS"}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "encaminhar_humano",
+            "description": "Transfere o atendimento para um humano.",
+            "parameters": {
+                "id_cliente": {"type": "string", "description": "ID do cliente"},
+                "resumo": {"type": "string", "description": "Resumo da conversa"}
+            }
+        }
+    }
+]
 
 def send_to_mistral(user_message):
     url = "https://api.mistral.ai/v1/agents/completions"
@@ -84,6 +132,104 @@ def send_whatsapp_message(phone, message, max_retries=3, timeout=10):
                 raise
             time.sleep(2)  # Espera 2 segundos antes de tentar novamente
 
+# Função para validar CPF
+
+def validar_cpf(cpf):
+    payload = {"cpf": cpf}
+    url = f"{IXC_API_URL}/validarCpf"
+    response = requests.post(url, json=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+# Função para consultar cliente
+
+def consultar_cliente(cpf):
+    payload = {"cpf": cpf}
+    url = f"{IXC_API_URL}/consultarCliente"
+    response = requests.post(url, json=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+# Função para consultar contratos ativos
+
+def consultar_contratos(id_cliente):
+    payload = {"id_cliente": id_cliente}
+    url = f"{IXC_API_URL}/consultarContratos"
+    response = requests.post(url, json=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+# Função para consultar boletos
+
+def consultar_boletos(id_cliente):
+    payload = {"id_cliente": id_cliente}
+    url = f"{IXC_API_URL}/consultarBoletos"
+    response = requests.post(url, json=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+# Função para consultar status do plano
+
+def consultar_status_plano(id_cliente):
+    payload = {"id_cliente": id_cliente}
+    url = f"{IXC_API_URL}/consultarStatusPlano"
+    response = requests.post(url, json=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+def consultar_dados_ixc(cpf):
+    payload = {"cpf": cpf}
+    try:
+        response = requests.post(IXC_API_URL, json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        return {"erro": "Timeout ao consultar IXC"}
+    except Exception as e:
+        return {"erro": str(e)}
+
+def abrir_os(id_cliente, motivo):
+    payload = {"id_cliente": id_cliente, "motivo": motivo}
+    url = f"{IXC_API_URL}/abrirOS"
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        return {"erro": "Timeout ao abrir OS"}
+    except Exception as e:
+        return {"erro": str(e)}
+
+def encaminhar_humano(id_cliente, resumo):
+    payload = {"id_cliente": id_cliente, "resumo": resumo}
+    url = f"{IXC_API_URL}/encaminharHumano"
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        return {"erro": "Timeout ao encaminhar para humano"}
+    except Exception as e:
+        return {"erro": str(e)}
+
+def call_mistral(messages, tools=None):
+    payload = {
+        "agent_id": MISTRAL_AGENT_ID,
+        "messages": messages,
+        "tools": tools,
+        "response_format": {"type": "text"},
+        "max_tokens": 500,
+        "presence_penalty": 0.5,
+        "frequency_penalty": 0.5,
+        "parallel_tool_calls": True
+    }
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    response = requests.post(MISTRAL_URL, headers=headers, json=payload)
+    return response.json()
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
@@ -113,15 +259,32 @@ def webhook():
         console.log(f"[red]Payload inesperado ou número inválido: {data}")
         return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
-    resposta = send_to_mistral(user_message)
-    console.log(f"[green]Resposta do agente: {resposta}")
-    console.log(f"[cyan]Enviando para MegaAPI: to={phone}, text={resposta}")
-    try:
-        megaapi_response = send_whatsapp_message(phone, resposta)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    return jsonify({"status": "ok", "megaapi_response": megaapi_response})
-
+    messages = [
+        {"role": "system", "content": PROMPT},
+        {"role": "user", "content": user_message}
+    ]
+    result = call_mistral(messages, tools)
+    # Loop para processar tool_calls até o agente não pedir mais nenhuma
+    while "tool_calls" in result and result["tool_calls"]:
+        for tool_call in result["tool_calls"]:
+            tool_name = tool_call["name"]
+            args = tool_call["arguments"]
+            if tool_name == "consultar_dados_ixc":
+                tool_result = consultar_dados_ixc(args["cpf"])
+            elif tool_name == "abrir_os":
+                tool_result = abrir_os(args["id_cliente"], args["motivo"])
+            elif tool_name == "encaminhar_humano":
+                tool_result = encaminhar_humano(args["id_cliente"], args["resumo"])
+            else:
+                tool_result = {"erro": "Tool não implementada"}
+            messages.append({
+                "role": "function",
+                "name": tool_name,
+                "content": str(tool_result)
+            })
+        result = call_mistral(messages, tools)
+    # Quando não houver mais tool_calls, retorna a resposta final do agente
+    return jsonify(result)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
