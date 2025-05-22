@@ -336,6 +336,9 @@ def call_mistral(messages, tools=None):
     response = requests.post(MISTRAL_URL, headers=headers, json=payload)
     return response.json()
 
+def is_cpf(text):
+    return isinstance(text, str) and text.isdigit() and len(text) == 11
+
 def processar_mensagem_usuario(remoteJid, message, messages, logs):
     # Detecta se é um CPF válido
     if is_cpf(message):
