@@ -347,7 +347,7 @@ def call_mistral(messages, tools=None):
 def is_cpf(text):
     return isinstance(text, str) and text.isdigit() and len(text) == 11
 
-def processar_mensagem_usuario(remoteJid, message, messages, logs):
+def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
     # Detecta se é um CPF válido
     if is_cpf(message):
         # Busca no Redis
@@ -366,7 +366,7 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs):
         # Salva histórico e logs (corrigido para salvar apenas a mensagem individual)
         salvar_historico(remoteJid, message, {"role": "user", "content": message})
         salvar_historico(remoteJid, message, {"role": "function", "name": "consultar_dados_ixc", "content": json.dumps(dados_ixc)})
-        salvar_log(remoteJid, message, logs)
+        salvar_log(remoteJid, message, f"[LOG] Mensagem processada: {message}")
         return True  # Indica que processou CPF
     return False
 
