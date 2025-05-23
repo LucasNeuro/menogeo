@@ -268,14 +268,26 @@ def webhook():
             messages.append({"role": "system", "content": " ".join(contexto_cliente)})
         console.log(f"[LOG] Contexto do cliente adicionado ao Mistral: {contexto_cliente}")
 
-        # Adicionar dados relevantes do Mem0AI ao contexto (ex: nome, endereço, status)
+        # Filtrar histórico do Mem0AI: só intenções, sem dados sensíveis
+        def is_intent_memory(mem):
+            if not isinstance(mem, dict) or not mem.get("memory"): return False
+            texto = mem["memory"].lower()
+            # Palavras-chave de intenção
+            if any(x in texto for x in ["preciso", "quero", "necessito", "estou sem", "reclamação", "elogio", "boleto", "status", "cadastro", "valor do plano", "abrir os", "transferir para humano", "ajuda", "suporte"]):
+                # Não pode conter dados sensíveis
+                if not any(x in texto for x in ["cpf", "endereço", "address", "contrato", "boleto de r$", "nome", "razao_social", "telefone", "pix", "linha_digitavel", "url_pdf", "gateway_link", "senha", "login", "mac", "ipv4"]):
+                    return True
+            return False
+        historico_intencoes = []
         if historico and isinstance(historico, dict) and "results" in historico:
-            for m in historico["results"]:
-                if isinstance(m, dict) and m.get("memory"):
-                    # Adiciona como system se for dado pessoal relevante
-                    if any(x in m["memory"].lower() for x in ["cpf", "endereço", "address", "contrato", "boleto", "status", "nome"]):
-                        messages.append({"role": "system", "content": m["memory"]})
-        # Adicionar histórico user/assistant (últimas 10 interações)
+            historico_intencoes = [m for m in historico["results"] if is_intent_memory(m)]
+        elif historico and isinstance(historico, list):
+            historico_intencoes = [m for m in historico if is_intent_memory(m)]
+        # Adicionar intenções ao contexto
+        for m in historico_intencoes[-5:]:
+            messages.append({"role": "system", "content": m["memory"]})
+
+        # Adicionar histórico user/assistant (últimas 10 interações, sem dados sensíveis)
         hist_msgs = []
         if historico and isinstance(historico, dict) and "results" in historico:
             hist_msgs = [m for m in mem0_to_mistral_messages(historico["results"]) if m.get("role") in ("user", "assistant")]
@@ -287,6 +299,9 @@ def webhook():
         for m in hist_msgs[-10:]:
             if last_role == m.get("role") == "user":
                 continue  # pula user duplicado
+            # Não adiciona mensagens com dados sensíveis
+            if any(x in m.get("content", "").lower() for x in ["cpf", "endereço", "address", "contrato", "boleto de r$", "nome", "razao_social", "telefone", "pix", "linha_digitavel", "url_pdf", "gateway_link", "senha", "login", "mac", "ipv4"]):
+                continue
             last_msgs.append(m)
             last_role = m.get("role")
         messages.extend(last_msgs)
@@ -303,96 +318,19 @@ def webhook():
         print("[LOG] Resposta do Mistral:")
         pprint.pprint(result)
         console.log(f"[LOG] Resposta do Mistral recebida: {result}")
-        # Novo loop: processa tool_calls sempre alternando assistant/tool
-        max_toolcall_loops = 8
-        toolcall_loops = 0
-        while True:
-            toolcall_loops += 1
-            if toolcall_loops > max_toolcall_loops:
-                print("[ERRO] Excesso de ciclos de tool_call. Abortando para evitar loop infinito.")
-                console.log("[ERRO] Excesso de ciclos de tool_call. Abortando para evitar loop infinito.")
-                break
-            msg = result["choices"][0]["message"]
-            # Se houver tool_calls, processa todas
-            if msg.get("tool_calls"):
-                if messages[-1]["role"] != "assistant":
-                    messages.append({
-                        "role": "assistant",
-                        "content": msg.get("content", ""),
-                        "tool_calls": msg["tool_calls"]
-                    })
-                for tool_call in msg["tool_calls"]:
-                    print("[LOG] Tool call recebida:", tool_call)
-                    console.log(f"[LOG] Tool call recebida: {tool_call}")
-                    tool_name = tool_call["function"]["name"]
-                    args = json.loads(tool_call["function"]["arguments"])
-                    console.log(f"[LOG] Tool call: {tool_name} | Args: {args}")
-                    # Sempre injeta o CPF do contexto se não informado
-                    if "cpf" in args and (not args["cpf"] or not is_cpf(args["cpf"])):
-                        if cpf_contexto:
-                            args["cpf"] = cpf_contexto
-                    # Gera resumo do atendimento para humano se for transferir
-                    if tool_name == "transferir_para_humano":
-                        historico = buscar_historico_mem0(remote_jid, phone)
-                        resumo = "Resumo do atendimento: "
-                        if historico and isinstance(historico, dict) and "results" in historico:
-                            for m in mem0_to_mistral_messages(historico["results"]):
-                                if m.get("role") in ("user", "assistant"):
-                                    resumo += f"\n[{m['role']}] {m['content']}"
-                        console.log(f"[LOG] Resumo gerado para humano: {resumo}")
-                        tool_result = transferir_para_humano(args["cpf"], resumo)
-                        console.log(f"[LOG] Resultado da tool transferir_para_humano: {tool_result}")
-                    elif tool_name == "consultar_dados_ixc":
-                        tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
-                        salvar_ixc_redis(remote_jid, args["cpf"], tool_result)
-                        console.log(f"[LOG] Resultado da tool consultar_dados_ixc: {tool_result}")
-                    elif tool_name == "consultar_boletos":
-                        tool_result = consultar_boletos_ixc(args["cpf"], remote_jid)
-                        console.log(f"[LOG] Resultado da tool consultar_boletos: {tool_result}")
-                    elif tool_name == "consultar_status_plano":
-                        tool_result = consultar_status_plano_ixc(args["cpf"], remote_jid)
-                        console.log(f"[LOG] Resultado da tool consultar_status_plano: {tool_result}")
-                    elif tool_name == "consultar_dados_cadastro":
-                        tool_result = consultar_dados_cadastro_ixc(args["cpf"], remote_jid)
-                        console.log(f"[LOG] Resultado da tool consultar_dados_cadastro: {tool_result}")
-                    elif tool_name == "consultar_valor_plano":
-                        tool_result = consultar_valor_plano_ixc(args["cpf"], remote_jid)
-                        console.log(f"[LOG] Resultado da tool consultar_valor_plano: {tool_result}")
-                    elif tool_name == "abrir_os":
-                        tool_result = abrir_os(args["id_cliente"], args["motivo"])
-                        console.log(f"[LOG] Resultado da tool abrir_os: {tool_result}")
-                    else:
-                        tool_result = {"erro": "Tool não implementada"}
-                        console.log(f"[LOG] Tool não implementada: {tool_name}")
-                    print("[LOG] Resultado da tool:", tool_result)
-                    messages.append({
-                        "role": "tool",
-                        "name": tool_name,
-                        "tool_call_id": tool_call["id"],
-                        "content": json.dumps(tool_result, ensure_ascii=False)
-                    })
-                result = call_mistral(messages, tools)
-                print("[LOG] Nova resposta do Mistral após tool_call:")
-                pprint.pprint(result)
-                console.log(f"[LOG] Nova resposta do Mistral após tool_call: {result}")
-                continue
-            # Se for resposta final do assistente
-            elif msg.get("role") == "assistant":
-                resposta_assistente = msg.get("content", "")
-                salvar_historico_mem0(remote_jid, phone, {"role": "assistant", "content": resposta_assistente})
-                console.log(f"[LOG] Resposta final do assistente: {resposta_assistente}")
-                break
-            else:
-                print(f"[ERRO] Resposta inesperada do Mistral: {msg}")
-                console.log(f"[ERRO] Resposta inesperada do Mistral: {msg}")
-                break
-        print("[LOG] Resposta final do agente:", result)
-        console.log(f"[LOG] Resposta final do agente: {result}")
         final_response = None
         if result and "choices" in result and result["choices"]:
             final_response = result["choices"][0]["message"]["content"]
         # Pós-processamento: garantir sugestão de próximos passos
         if final_response:
+            # Validação: garantir que nome/boletos apresentados batem com o contexto do Redis/IXC
+            if nome_cliente and nome_cliente not in final_response:
+                final_response = f"Olá, {nome_cliente}!\n" + final_response
+            # (Opcional) Validar se o link do boleto é do IXC
+            if dados_ixc and 'boletos' in dados_ixc and dados_ixc['boletos']:
+                url_pdf = dados_ixc['boletos'][0].get('url_pdf')
+                if url_pdf and url_pdf not in final_response:
+                    final_response += f"\nSegue o link para pagamento: {url_pdf}"
             sugestao = None
             if nome_cliente:
                 sugestao = f"\n\nPosso te ajudar com mais alguma coisa, {nome_cliente}?"
