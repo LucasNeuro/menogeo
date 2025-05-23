@@ -389,7 +389,9 @@ def webhook():
         classificacao = classificar_intencao_deepseek(user_message)
         intencao = classificacao.get("intencao", "outros")
         entidades = classificacao.get("entidades", {})
-        print(f"[DeepSeek] Intenção detectada: {intencao} | Entidades: {entidades}")
+        print(f"[DeepSeek][MICROAGENTE] Mensagem: {user_message}")
+        print(f"[DeepSeek][MICROAGENTE] Intenção detectada: {intencao}")
+        print(f"[DeepSeek][MICROAGENTE] Entidades extraídas: {entidades}")
         # Se for saudação, elogio ou despedida, responder cordialmente
         if intencao in ["saudacao", "elogio", "despedida"]:
             resposta = "Olá! Como posso te ajudar hoje?"
