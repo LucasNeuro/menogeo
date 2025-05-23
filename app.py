@@ -179,11 +179,11 @@ def webhook():
         historico = buscar_historico_mem0(remote_jid, phone)
         # Montar contexto para o Mistral
         messages = [{"role": "system", "content": PROMPT}]
-        # Ajuste: garantir que só mensagens válidas vão para o Mistral
+        # Ajuste: converter histórico para formato correto
         if historico and isinstance(historico, dict) and "results" in historico:
-            messages.extend(historico["results"])
+            messages.extend(mem0_to_mistral_messages(historico["results"]))
         elif historico and isinstance(historico, list):
-            messages.extend(historico)
+            messages.extend(mem0_to_mistral_messages(historico))
         messages.append({"role": "user", "content": user_message})
         print("\n[LOG] Enviando para Mistral:")
         pprint.pprint(messages)
@@ -423,6 +423,24 @@ def buscar_ixc_mem0(remoteJid, cpf):
         # Retorna o conteúdo mais recente
         return json.loads(memories[0]["content"])
     return None
+
+def mem0_to_mistral_messages(memories):
+    messages = []
+    for m in memories:
+        # Se já está no formato correto, só adiciona
+        if isinstance(m, dict) and "role" in m and "content" in m:
+            msg = {"role": m["role"], "content": m["content"]}
+            if "name" in m:
+                msg["name"] = m["name"]
+            messages.append(msg)
+        # Se é um objeto do Mem0AI, tenta extrair
+        elif isinstance(m, dict) and "memory" in m:
+            # Por padrão, considera como mensagem de usuário
+            # (Ajuste conforme necessário para distinguir user/assistant/tool)
+            role = m.get("role", "user")
+            content = m["memory"]
+            messages.append({"role": role, "content": content})
+    return messages
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
