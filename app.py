@@ -197,7 +197,9 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
 
 def detect_intent_deepseek(msg):
     if not DEEPSEEK_API_KEY or not DEEPSEEK_URL:
+        print("[DeepSeek][ERRO] Variáveis de ambiente não definidas!")
         raise RuntimeError("DEEPSEEK_API_KEY ou DEEPSEEK_URL não definida no ambiente!")
+    print(f"[DeepSeek][LOG] Classificando intenção para: {msg}")
     prompt = (
         "Você é um classificador de intenções para atendimento de provedores de internet. "
         "Dada a mensagem do usuário, responda apenas com a intenção principal entre: "
@@ -218,10 +220,13 @@ def detect_intent_deepseek(msg):
         "Content-Type": "application/json"
     }
     try:
+        print(f"[DeepSeek][LOG] Payload: {payload}")
         response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=10)
+        print(f"[DeepSeek][LOG] Status: {response.status_code} | Resposta: {response.text}")
         response.raise_for_status()
         result = response.json()
         intent = result["choices"][0]["message"]["content"].strip().lower()
+        print(f"[DeepSeek][LOG] Intenção detectada: {intent}")
         # Normaliza possíveis variações
         if "boleto" in intent:
             return "boleto"
@@ -275,7 +280,14 @@ def webhook():
             console.log(f"[red]Payload inesperado ou número inválido: {data}")
             return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
-        intencao = detect_intent_deepseek(user_message)
+        intencao = None
+        try:
+            intencao = detect_intent_deepseek(user_message)
+        except Exception as e:
+            console.log(f"[DeepSeek][ERRO] Falha crítica ao detectar intenção: {str(e)}")
+            resposta = "Desculpe, não consegui entender sua solicitação no momento. Por favor, tente novamente em instantes."
+            send_whatsapp_message(phone, resposta)
+            return jsonify({"status": "erro_intencao", "erro": str(e)})
         # Flag de cumprimento no Redis
         cumprimentou_key = f"conversa:{remote_jid}:cumprimentou"
         cumprimentou = redis_client.get(cumprimentou_key)
