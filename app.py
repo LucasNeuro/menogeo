@@ -336,6 +336,7 @@ def webhook():
             console.log(f"[red]Payload inesperado ou número inválido: {data}")
             return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
+        # --- SEMPRE chama o micro agente de intenção antes de qualquer outra lógica ---
         intencao = None
         try:
             if INTENT_AGENT == "mistral":
@@ -349,31 +350,15 @@ def webhook():
             resposta = "Desculpe, não consegui entender sua solicitação no momento. Por favor, tente novamente em instantes."
             send_whatsapp_message(phone, resposta)
             return jsonify({"status": "erro_intencao", "erro": str(e)})
-        # Flag de cumprimento no Redis
-        cumprimentou_key = f"conversa:{remote_jid}:cumprimentou"
-        cumprimentou = redis_client.get(cumprimentou_key)
-        # Se for só cumprimento, responde apenas com cumprimento cordial
-        if intencao == "cumprimento":
-            nome_cliente = None
-            dados_ixc = None
-            cpf_contexto = get_cpf_from_context(remote_jid)
-            if cpf_contexto:
-                dados_ixc = buscar_ixc_redis(remote_jid, cpf_contexto)
-                if dados_ixc and 'cliente' in dados_ixc:
-                    nome_cliente = dados_ixc['cliente'].get('razao_social') or dados_ixc['cliente'].get('nome')
-            if not cumprimentou:
-                resposta = f"Olá, {nome_cliente}! Como posso ajudar?" if nome_cliente else "Olá! Como posso ajudar?"
-                redis_client.setex(cumprimentou_key, 3600, "1")
-            else:
-                resposta = "Como posso ajudar?"
-            send_whatsapp_message(phone, resposta)
-            return jsonify({"status": "cumprimento"})
+
+        console.log(f"[INTENT_AGENT] Intenção detectada: {intencao}")
         # Se não for intenção clara, responde pedindo para o usuário explicar o que deseja
         if not intencao:
             resposta = "Por favor, me diga como posso te ajudar (ex: boleto, status do plano, cadastro, etc)."
             send_whatsapp_message(phone, resposta)
             return jsonify({"status": "aguardando_intencao"})
-        # Se for intenção sensível, segue fluxo normal (CPF/contexto, etc)
+
+        # --- Só segue para o restante do fluxo se a intenção for válida ---
         # Se o usuário informar um CPF válido, consultar e salvar dados do IXC
         if is_cpf(user_message):
             salvar_cpf_contexto(remote_jid, user_message)
