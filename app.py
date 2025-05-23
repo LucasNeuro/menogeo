@@ -138,12 +138,25 @@ redis_client = redis.StrictRedis.from_url(redis_url, decode_responses=True)
 # Helpers para cache IXC no Redis
 REDIS_TTL_IXC = 60 * 30  # 30 minutos
 
+# Helpers para contexto de CPF
+
+def get_cpf_from_context(remoteJid):
+    key = f"conversa:{remoteJid}:cpf"
+    cpf = redis_client.get(key)
+    return cpf
+
+def salvar_cpf_contexto(remoteJid, cpf):
+    key = f"conversa:{remoteJid}:cpf"
+    redis_client.setex(key, REDIS_TTL_IXC, cpf)
+
 def get_namespace(remoteJid, cpf):
     return f"conversa:{remoteJid}:{cpf}:"
 
 def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
     # Detecta se é um CPF válido
     if is_cpf(message):
+        # Salva o CPF no contexto
+        salvar_cpf_contexto(remoteJid, message)
         # Busca no Mem0AI
         dados_ixc = buscar_ixc_redis(remoteJid, message)
         if not dados_ixc:
@@ -183,6 +196,13 @@ def webhook():
             console.log(f"[red]Payload inesperado ou número inválido: {data}")
             return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
+        # Detecta e salva CPF se informado
+        if is_cpf(user_message):
+            salvar_cpf_contexto(remote_jid, user_message)
+
+        # Buscar CPF do contexto se não informado
+        cpf_contexto = get_cpf_from_context(remote_jid)
+
         # Buscar histórico do Mem0AI (apenas user/assistant)
         historico = buscar_historico_mem0(remote_jid, phone)
         # Montar contexto para o Mistral
@@ -194,14 +214,12 @@ def webhook():
             hist_msgs = [m for m in mem0_to_mistral_messages(historico) if m.get("role") in ("user", "assistant")]
         else:
             hist_msgs = []
-        # Garante alternância user/assistant
         last_role = None
         for m in hist_msgs:
             if last_role == m.get("role") == "user":
                 continue  # pula user duplicado
             messages.append(m)
             last_role = m.get("role")
-        # Adiciona a nova mensagem do usuário
         if last_role != "user":
             messages.append({"role": "user", "content": user_message})
         print("\n[LOG] Enviando para Mistral:")
@@ -221,6 +239,10 @@ def webhook():
                     print("[LOG] Tool call recebida:", tool_call)
                     tool_name = tool_call["function"]["name"]
                     args = json.loads(tool_call["function"]["arguments"])
+                    # Se a tool_call precisa de CPF e não foi informado, usa o do contexto
+                    if "cpf" in args and (not args["cpf"] or not is_cpf(args["cpf"])):
+                        if cpf_contexto:
+                            args["cpf"] = cpf_contexto
                     if tool_name == "consultar_dados_ixc":
                         tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
                     elif tool_name == "consultar_boletos":
@@ -238,13 +260,11 @@ def webhook():
                     else:
                         tool_result = {"erro": "Tool não implementada"}
                     print("[LOG] Resultado da tool:", tool_result)
-                    # Adiciona o resultado da tool apenas ao contexto da conversa (NÃO salva no Mem0AI)
                     messages.append({
                         "role": "tool",
                         "name": tool_name,
                         "content": json.dumps(tool_result, ensure_ascii=False)
                     })
-                # Após adicionar tool, faz nova chamada ao Mistral e repete o loop
                 result = call_mistral(messages, tools)
                 print("[LOG] Nova resposta do Mistral após tool_call:")
                 pprint.pprint(result)
