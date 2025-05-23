@@ -507,7 +507,12 @@ def is_cpf(text):
     return isinstance(text, str) and text.isdigit() and len(text) == 11
 
 def salvar_historico_mem0(remoteJid, cpf, mensagem):
+    # Só salva mensagens de intenção/conversa, nunca dados sensíveis
     if mensagem.get("role") in ("user", "assistant"):
+        # Proteção extra: não salva se mensagem contém dados sensíveis
+        texto = mensagem.get("content", "").lower()
+        if any(x in texto for x in ["cpf", "endereço", "address", "contrato", "boleto de r$", "nome", "razao_social", "telefone", "pix", "linha_digitavel", "url_pdf", "gateway_link", "senha", "login", "mac", "ipv4"]):
+            return
         user_id = f"{remoteJid}:{cpf}"
         print(f"[MEM0AI] Salvando no histórico: {mensagem} para user_id={user_id}")
         mem0_client.add([mensagem], user_id=user_id, agent_id="geovana")
@@ -519,6 +524,7 @@ def buscar_historico_mem0(remoteJid, cpf, page=1, page_size=50):
     return historico
 
 def salvar_ixc_redis(remoteJid, cpf, dados_ixc):
+    # Proteção extra: nunca salvar histórico de conversa aqui
     key = f"conversa:{remoteJid}:{cpf}:ixc"
     redis_client.setex(key, REDIS_TTL_IXC, json.dumps(dados_ixc, ensure_ascii=False))
 
