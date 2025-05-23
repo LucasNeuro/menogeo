@@ -235,6 +235,13 @@ def webhook():
         while True:
             msg = result["choices"][0]["message"]
             if msg.get("tool_calls"):
+                # Garante que a última mensagem do contexto é assistant antes de tool
+                if messages[-1]["role"] != "assistant":
+                    messages.append({
+                        "role": "assistant",
+                        "content": msg.get("content", ""),
+                        "tool_calls": msg["tool_calls"]
+                    })
                 for tool_call in msg["tool_calls"]:
                     print("[LOG] Tool call recebida:", tool_call)
                     tool_name = tool_call["function"]["name"]
