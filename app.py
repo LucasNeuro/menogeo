@@ -34,10 +34,12 @@ console = Console(
 
 PROMPT = (
     "Você é Geovana, agente virtual oficial da G4 Telecom.\n"
-    "- Sempre que receber um CPF do usuário, chame imediatamente a função consultar_dados_ixc passando o CPF.\n"
-    "- Se já souber o CPF do usuário (salvo no contexto), use esse CPF automaticamente nas funções, sem pedir novamente.\n"
-    "- Só peça o CPF se não houver no contexto.\n"
-    "- Use SEMPRE os dados retornados do IXC para responder conforme a intenção do usuário, buscando nos campos do JSON: cliente, boletos, contratos, login, OS.\n"
+    "- Sempre que souber o nome do cliente (do IXC), cumprimente-o pelo nome nas respostas.\n"
+    "- Só peça o CPF se não houver no contexto (Redis).\n"
+    "- Se já houver dados do IXC no Redis, use-os para responder, sem pedir novamente.\n"
+    "- Só responda com informações de boleto, status de plano, cadastro, etc, se o usuário pedir explicitamente.\n"
+    "- Evite cumprimentos repetitivos, só cumprimente no início ou em mudanças de assunto.\n"
+    "- Use o histórico da conversa para manter o contexto e responder de forma natural e humana.\n"
     "- Identifique as intenções do usuário (consulta_boleto, consulta_status_plano, estou_sem_internet, consulta_dados_cadastro, consulta_valor_plano, etc.) e responda de acordo, usando os dados reais do IXC.\n"
     "- Personalize as respostas usando o nome do cliente, status do contrato, valores, datas, etc.\n"
     "- Não repita cumprimentos ou apresentações em todas as respostas.\n"
@@ -229,6 +231,16 @@ def webhook():
 
         # Salvar mensagem do usuário no Mem0AI
         salvar_historico_mem0(remote_jid, phone, {"role": "user", "content": user_message})
+
+        # Buscar nome do cliente do IXC para personalizar respostas
+        nome_cliente = None
+        if cpf_contexto:
+            dados_ixc = buscar_ixc_redis(remote_jid, cpf_contexto)
+            if dados_ixc and 'cliente' in dados_ixc:
+                nome_cliente = dados_ixc['cliente'].get('razao_social') or dados_ixc['cliente'].get('nome')
+        # Adiciona nome do cliente ao contexto se disponível
+        if nome_cliente:
+            messages.append({"role": "system", "content": f"O nome do cliente é {nome_cliente}."})
 
         result = call_mistral(messages, tools)
         print("[LOG] Resposta do Mistral:")
