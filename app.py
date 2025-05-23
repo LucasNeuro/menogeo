@@ -24,7 +24,7 @@ DEEPSEEK_URL = os.getenv("DEEPSEEK_URL")
 # Mistral credentials
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 MISTRAL_AGENT_ID = os.getenv("MISTRAL_AGENT_ID")
-MISTRAL_URL = "https://api.mistral.ai/v1/agents/completions"
+MISTRAL_URL = os.getenv("MISTRAL_URL", "https://api.mistral.ai/v1/chat/completions")
 
 IXC_API_URL = os.getenv("IXC_API_URL", "https://n8n.rafaeltoshiba.com.br/webhook/ixc/consultaCliente")
 
@@ -251,6 +251,62 @@ def detect_intent_deepseek(msg):
         print(f"[DeepSeek][ERRO] Falha ao classificar intenção: {str(e)}")
         return None
 
+def detect_intent_mistral(msg):
+    if not MISTRAL_API_KEY or not MISTRAL_URL:
+        print("[Mistral][ERRO] Variáveis de ambiente não definidas!")
+        raise RuntimeError("MISTRAL_API_KEY ou MISTRAL_URL não definida no ambiente!")
+    print(f"[Mistral][LOG] Classificando intenção para: {msg}")
+    prompt = (
+        "Você é um classificador de intenções para atendimento de provedores de internet. "
+        "Dada a mensagem do usuário, responda apenas com a intenção principal entre: "
+        "consulta_boleto, consulta_status_plano, estou_sem_internet, consulta_dados_cadastro, consulta_valor_plano, abrir_os, transferir_para_humano, cumprimento, outra.\n"
+        f"Mensagem: '{msg}'\nResponda apenas com a intenção."
+    )
+    payload = {
+        "model": "mistral-large-latest",
+        "messages": [
+            {"role": "system", "content": "Classifique a intenção da mensagem."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 10,
+        "temperature": 0.0
+    }
+    headers = {
+        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    try:
+        print(f"[Mistral][LOG] Payload: {payload}")
+        response = requests.post(MISTRAL_URL, headers=headers, json=payload, timeout=10)
+        print(f"[Mistral][LOG] Status: {response.status_code} | Resposta: {response.text}")
+        response.raise_for_status()
+        result = response.json()
+        intent = result["choices"][0]["message"]["content"].strip().lower()
+        print(f"[Mistral][LOG] Intenção detectada: {intent}")
+        # Normalização igual ao DeepSeek
+        if "boleto" in intent:
+            return "boleto"
+        if "status" in intent:
+            return "status"
+        if "cadastro" in intent:
+            return "cadastro"
+        if "valor" in intent:
+            return "valor_plano"
+        if "abrir_os" in intent or "ordem" in intent:
+            return "abrir_os"
+        if "humano" in intent or "atendente" in intent:
+            return "transferir_para_humano"
+        if "cumpriment" in intent:
+            return "cumprimento"
+        if "internet" in intent:
+            return "estou_sem_internet"
+        if "outra" in intent:
+            return None
+        return intent
+    except Exception as e:
+        print(f"[Mistral][ERRO] Falha ao classificar intenção: {str(e)}")
+        return None
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -282,9 +338,14 @@ def webhook():
 
         intencao = None
         try:
-            intencao = detect_intent_deepseek(user_message)
+            if INTENT_AGENT == "mistral":
+                print("[INTENT_AGENT] Usando Mistral para detecção de intenção.")
+                intencao = detect_intent_mistral(user_message)
+            else:
+                print("[INTENT_AGENT] Usando DeepSeek para detecção de intenção.")
+                intencao = detect_intent_deepseek(user_message)
         except Exception as e:
-            console.log(f"[DeepSeek][ERRO] Falha crítica ao detectar intenção: {str(e)}")
+            console.log(f"[INTENT_AGENT][ERRO] Falha crítica ao detectar intenção: {str(e)}")
             resposta = "Desculpe, não consegui entender sua solicitação no momento. Por favor, tente novamente em instantes."
             send_whatsapp_message(phone, resposta)
             return jsonify({"status": "erro_intencao", "erro": str(e)})
@@ -721,8 +782,7 @@ def processar_mensagem_fila():
             except Exception as e:
                 console.log(f"[FILA][ERRO] Falha ao processar mensagem da fila: {str(e)} | Raw: {raw}")
 
-# Para rodar o worker em thread separada (exemplo, não inicia automaticamente)
-# Thread(target=processar_mensagem_fila, daemon=True).start()
+INTENT_AGENT = os.getenv("INTENT_AGENT", "deepseek").lower()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
