@@ -187,12 +187,23 @@ def webhook():
         historico = buscar_historico_mem0(remote_jid, phone)
         # Montar contexto para o Mistral
         messages = [{"role": "system", "content": PROMPT}]
-        # Ajuste: converter histórico para formato correto
+        # Ajuste: alternar user/assistant corretamente
         if historico and isinstance(historico, dict) and "results" in historico:
-            messages.extend([m for m in mem0_to_mistral_messages(historico["results"]) if m.get("role") in ("user", "assistant")])
+            hist_msgs = [m for m in mem0_to_mistral_messages(historico["results"]) if m.get("role") in ("user", "assistant")]
         elif historico and isinstance(historico, list):
-            messages.extend([m for m in mem0_to_mistral_messages(historico) if m.get("role") in ("user", "assistant")])
-        messages.append({"role": "user", "content": user_message})
+            hist_msgs = [m for m in mem0_to_mistral_messages(historico) if m.get("role") in ("user", "assistant")]
+        else:
+            hist_msgs = []
+        # Garante alternância user/assistant
+        last_role = None
+        for m in hist_msgs:
+            if last_role == m.get("role") == "user":
+                continue  # pula user duplicado
+            messages.append(m)
+            last_role = m.get("role")
+        # Adiciona a nova mensagem do usuário
+        if last_role != "user":
+            messages.append({"role": "user", "content": user_message})
         print("\n[LOG] Enviando para Mistral:")
         pprint.pprint(messages)
 
@@ -412,14 +423,16 @@ def is_cpf(text):
     return isinstance(text, str) and text.isdigit() and len(text) == 11
 
 def salvar_historico_mem0(remoteJid, cpf, mensagem):
-    # Só salva se for user ou assistant
     if mensagem.get("role") in ("user", "assistant"):
         user_id = f"{remoteJid}:{cpf}"
+        print(f"[MEM0AI] Salvando no histórico: {mensagem} para user_id={user_id}")
         mem0_client.add([mensagem], user_id=user_id, agent_id="geovana")
 
 def buscar_historico_mem0(remoteJid, cpf, page=1, page_size=50):
     user_id = f"{remoteJid}:{cpf}"
-    return mem0_client.get_all(user_id=user_id, page=page, page_size=page_size)
+    historico = mem0_client.get_all(user_id=user_id, page=page, page_size=page_size)
+    print(f"[MEM0AI] Histórico retornado para user_id={user_id}: {historico}")
+    return historico
 
 def salvar_ixc_redis(remoteJid, cpf, dados_ixc):
     key = f"conversa:{remoteJid}:{cpf}:ixc"
