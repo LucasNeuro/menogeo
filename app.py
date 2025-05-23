@@ -34,17 +34,18 @@ console = Console(
 
 PROMPT = (
     "Você é Geovana, agente virtual oficial da G4 Telecom.\n"
-    "- Sempre que souber o nome do cliente (do IXC), cumprimente-o pelo nome nas respostas.\n"
+    "- Sempre cumprimente o cliente pelo nome (do IXC) no início ou em mudanças de assunto.\n"
     "- Só peça o CPF se não houver no contexto (Redis).\n"
     "- Se já houver dados do IXC no Redis, use-os para responder, sem pedir novamente.\n"
     "- Só responda com informações de boleto, status de plano, cadastro, etc, se o usuário pedir explicitamente.\n"
-    "- Evite cumprimentos repetitivos, só cumprimente no início ou em mudanças de assunto.\n"
     "- Use o histórico da conversa para manter o contexto e responder de forma natural e humana.\n"
+    "- Se o usuário interromper um fluxo e voltar, retome o assunto anterior de forma cordial.\n"
+    "- Sempre sugira próximos passos ao final de cada atendimento (ex: 'Posso te ajudar com mais alguma coisa, {nome_cliente}?').\n"
     "- Identifique as intenções do usuário (consulta_boleto, consulta_status_plano, estou_sem_internet, consulta_dados_cadastro, consulta_valor_plano, etc.) e responda de acordo, usando os dados reais do IXC.\n"
     "- Personalize as respostas usando o nome do cliente, status do contrato, valores, datas, etc.\n"
     "- Não repita cumprimentos ou apresentações em todas as respostas.\n"
     "- Se precisar abrir uma ordem de serviço, use a função abrir_os.\n"
-    "- Se precisar transferir para um atendente humano, use a função transferir_para_humano.\n"
+    "- Se precisar transferir para um atendente humano, use a função transferir_para_humano e gere um resumo do atendimento para o humano.\n"
     "- Responda de forma clara, cordial, com listas, tópicos em negrito e poucos emojis, adaptando para leitura no WhatsApp.\n"
     "- Nunca envie informações não solicitadas e só peça dados ao backend se realmente necessário.\n"
     "- Se não conseguir resolver, oriente o usuário a falar com um atendente humano.\n"
@@ -249,7 +250,6 @@ def webhook():
         while True:
             msg = result["choices"][0]["message"]
             if msg.get("tool_calls"):
-                # Garante que a última mensagem do contexto é assistant antes de tool
                 if messages[-1]["role"] != "assistant":
                     messages.append({
                         "role": "assistant",
@@ -264,7 +264,17 @@ def webhook():
                     if "cpf" in args and (not args["cpf"] or not is_cpf(args["cpf"])):
                         if cpf_contexto:
                             args["cpf"] = cpf_contexto
-                    if tool_name == "consultar_dados_ixc":
+                    # Gera resumo do atendimento para humano se for transferir
+                    if tool_name == "transferir_para_humano":
+                        # Gera resumo usando o Mistral
+                        historico = buscar_historico_mem0(remote_jid, phone)
+                        resumo = "Resumo do atendimento: "
+                        if historico and isinstance(historico, dict) and "results" in historico:
+                            for m in mem0_to_mistral_messages(historico["results"]):
+                                if m.get("role") in ("user", "assistant"):
+                                    resumo += f"\n[{m['role']}] {m['content']}"
+                        tool_result = transferir_para_humano(args["cpf"], resumo)
+                    elif tool_name == "consultar_dados_ixc":
                         tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
                     elif tool_name == "consultar_boletos":
                         tool_result = consultar_boletos_ixc(args["cpf"])
@@ -274,8 +284,6 @@ def webhook():
                         tool_result = consultar_dados_cadastro_ixc(args["cpf"])
                     elif tool_name == "consultar_valor_plano":
                         tool_result = consultar_valor_plano_ixc(args["cpf"])
-                    elif tool_name == "transferir_para_humano":
-                        tool_result = transferir_para_humano(args["cpf"], args["resumo"])
                     elif tool_name == "abrir_os":
                         tool_result = abrir_os(args["id_cliente"], args["motivo"])
                     else:
@@ -504,6 +512,17 @@ def mem0_to_mistral_messages(memories):
             content = m["memory"]
             messages.append({"role": role, "content": content})
     return messages
+
+def transferir_para_humano(cpf, resumo):
+    # Envia o resumo para o webhook Make.com
+    url = "https://hook.us2.make.com/f1x53952bxirumz2gnfpoabdo397uws2"
+    payload = {"cpf": cpf, "resumo": resumo}
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        response.raise_for_status()
+        return {"status": "Transferido para humano", "resumo": resumo}
+    except Exception as e:
+        return {"erro": str(e)}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
