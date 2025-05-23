@@ -12,6 +12,7 @@ import redis
 from threading import Thread
 import uuid
 import requests as req_deepseek
+import re
 
 load_dotenv()
 
@@ -40,7 +41,7 @@ console = Console(
 
 PROMPT = (
     "Você é Geovana, agente virtual oficial da G4 Telecom.\n"
-    "- Sempre cumprimente o cliente pelo nome (do IXC) no início ou em mudanças de assunto.\n"
+    "- Sempre cumprimente o cliente pelo nome (do IXC) no início da conversa ou em mudanças de assunto, mas nunca mais de uma vez por conversa.\n"
     "- Só peça o CPF se não houver no contexto (Redis).\n"
     "- Se já houver dados do IXC no Redis, use-os para responder, sem pedir novamente.\n"
     "- Só responda com informações de boleto, status de plano, cadastro, etc, se o usuário pedir explicitamente.\n"
@@ -49,7 +50,9 @@ PROMPT = (
     "- Sempre sugira próximos passos ao final de cada atendimento (ex: 'Posso te ajudar com mais alguma coisa, {nome_cliente}?').\n"
     "- Identifique as intenções do usuário (consulta_boleto, consulta_status_plano, estou_sem_internet, consulta_dados_cadastro, consulta_valor_plano, etc.) e responda de acordo, usando os dados reais do IXC.\n"
     "- Personalize as respostas usando o nome do cliente, status do contrato, valores, datas, etc.\n"
-    "- Não repita cumprimentos ou apresentações em todas as respostas.\n"
+    "- Nunca repita cumprimentos ou o nome do cliente mais de uma vez por resposta.\n"
+    "- Nunca envie informações não solicitadas. Só responda à intenção atual detectada.\n"
+    "- Nunca misture dados ou respostas de outras intenções.\n"
     "- Se precisar abrir uma ordem de serviço, use a função abrir_os.\n"
     "- Se precisar transferir para um atendente humano, use a função transferir_para_humano e gere um resumo do atendimento para o humano.\n"
     "- Responda de forma clara, cordial, com listas, tópicos em negrito e poucos emojis, adaptando para leitura no WhatsApp.\n"
@@ -230,6 +233,17 @@ def classificar_intencao_deepseek(mensagem_usuario):
         print(f"[DeepSeek][ERRO] Falha ao classificar intenção: {str(e)}")
     return {"intencao": "outros", "entidades": {}}
 
+# --- FLAG DE CUMPRIMENTO NO REDIS ---
+CUMPRIMENTO_TTL = 60 * 60 * 6  # 6 horas (ajuste conforme necessário)
+
+def cumprimentou_cliente(remoteJid):
+    key = f"conversa:{remoteJid}:cumprimentou"
+    return redis_client.get(key) == "1"
+
+def setar_cumprimento_cliente(remoteJid):
+    key = f"conversa:{remoteJid}:cumprimentou"
+    redis_client.setex(key, CUMPRIMENTO_TTL, "1")
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -317,21 +331,39 @@ def webhook():
                 if not any(x in texto for x in ["cpf", "endereço", "address", "contrato", "boleto de r$", "nome", "razao_social", "telefone", "pix", "linha_digitavel", "url_pdf", "gateway_link", "senha", "login", "mac", "ipv4"]):
                     return True
             return False
+        # --- NOVO: Só adicionar histórico da mesma intenção ---
+        def is_same_intent(mem, intencao):
+            if not isinstance(mem, dict) or not mem.get("memory"): return False
+            texto = mem["memory"].lower()
+            if intencao == "consulta_boleto" and "boleto" in texto:
+                return True
+            if intencao == "consulta_status_plano" and "status" in texto:
+                return True
+            if intencao == "estou_sem_internet" and ("sem internet" in texto or "internet" in texto or "conexão" in texto):
+                return True
+            if intencao == "consulta_dados_cadastro" and ("cadastro" in texto or "dados cadastrais" in texto):
+                return True
+            if intencao == "consulta_valor_plano" and ("valor do plano" in texto or "mensalidade" in texto):
+                return True
+            if intencao == "fazer_contrato" and ("contrato" in texto or "assinar" in texto):
+                return True
+            if intencao in ["reclamar_atendimento", "elogiar_servico", "falar_com_atendente"] and ("reclamação" in texto or "elogio" in texto or "atendente" in texto):
+                return True
+            return False
         historico_intencoes = []
         if historico and isinstance(historico, dict) and "results" in historico:
-            historico_intencoes = [m for m in historico["results"] if is_intent_memory(m)]
+            historico_intencoes = [m for m in historico["results"] if is_intent_memory(m) and is_same_intent(m, intencao)]
         elif historico and isinstance(historico, list):
-            historico_intencoes = [m for m in historico if is_intent_memory(m)]
-        # Adicionar intenções ao contexto
+            historico_intencoes = [m for m in historico if is_intent_memory(m) and is_same_intent(m, intencao)]
+        # Adicionar intenções ao contexto (apenas da mesma intenção)
         for m in historico_intencoes[-5:]:
             messages.append({"role": "system", "content": m["memory"]})
-
-        # Adicionar histórico user/assistant (últimas 10 interações, sem dados sensíveis)
+        # Adicionar histórico user/assistant (últimas 10 interações, sem dados sensíveis, da mesma intenção)
         hist_msgs = []
         if historico and isinstance(historico, dict) and "results" in historico:
-            hist_msgs = [m for m in mem0_to_mistral_messages(historico["results"]) if m.get("role") in ("user", "assistant")]
+            hist_msgs = [m for m in mem0_to_mistral_messages(historico["results"]) if m.get("role") in ("user", "assistant") and is_same_intent(m, intencao)]
         elif historico and isinstance(historico, list):
-            hist_msgs = [m for m in mem0_to_mistral_messages(historico) if m.get("role") in ("user", "assistant")]
+            hist_msgs = [m for m in mem0_to_mistral_messages(historico) if m.get("role") in ("user", "assistant") and is_same_intent(m, intencao)]
         # Remove duplicidade e pega só as últimas 10
         last_msgs = []
         last_role = None
@@ -372,6 +404,41 @@ def webhook():
             return jsonify({"status": "ok", "intencao": intencao})
         # Se for intenção clara, seguir fluxo normal (já existente)
 
+        # --- REGRAS DE NEGÓCIO NO BACKEND ---
+        # Checagens antes de chamar o Mistral
+        resposta_antecipada = None
+        if intencao == "consulta_boleto":
+            # Exemplo: só mostra boletos se contrato ativo
+            status_contrato = None
+            if dados_ixc and 'contrato' in dados_ixc:
+                status_contrato = dados_ixc['contrato'].get('status')
+            if status_contrato and status_contrato.lower() != 'ativo':
+                resposta_antecipada = f"Seu contrato está '{status_contrato}'. Não é possível exibir boletos. Por favor, regularize sua situação ou fale com um atendente."
+        elif intencao == "estou_sem_internet":
+            # Exemplo: se contrato bloqueado, orientar ou transferir
+            status_contrato = None
+            status_internet = None
+            if dados_ixc and 'contrato' in dados_ixc:
+                status_contrato = dados_ixc['contrato'].get('status')
+                status_internet = dados_ixc['contrato'].get('status_internet')
+            if status_contrato and status_contrato.lower() == 'bloqueado':
+                resposta_antecipada = "Seu contrato está bloqueado. Para reativação, regularize seus boletos ou fale com um atendente."
+            elif status_internet and status_internet.lower() != 'ativo':
+                resposta_antecipada = f"Sua internet está '{status_internet}'. Recomendo falar com o suporte."
+        elif intencao == "consulta_valor_plano":
+            # Exemplo: só mostra valor se contrato ativo
+            status_contrato = None
+            if dados_ixc and 'contrato' in dados_ixc:
+                status_contrato = dados_ixc['contrato'].get('status')
+            if status_contrato and status_contrato.lower() != 'ativo':
+                resposta_antecipada = f"Seu contrato está '{status_contrato}'. Não é possível exibir o valor do plano."
+        # Se houver resposta antecipada, envia e encerra
+        if resposta_antecipada:
+            resposta_antecipada = limpar_resposta(resposta_antecipada, nome_cliente, intencao)
+            send_whatsapp_message(phone, resposta_antecipada)
+            console.log(f"[LOG] Mensagem enviada para WhatsApp (regra de negócio): {resposta_antecipada}")
+            return jsonify({"status": "regra_negocio", "mensagem": resposta_antecipada})
+
         result = call_mistral(messages, tools)
         print("[LOG] Resposta do Mistral:")
         pprint.pprint(result)
@@ -397,9 +464,23 @@ def webhook():
             # Só adiciona sugestão se não houver algo similar já na resposta
             if sugestao.strip().lower() not in final_response.strip().lower():
                 final_response = final_response.strip() + sugestao
-        if final_response:
-            send_whatsapp_message(phone, final_response)
-            console.log(f"[LOG] Mensagem enviada para WhatsApp: {final_response}")
+
+        # Cumprimento só uma vez por conversa
+        cumprimentou = cumprimentou_cliente(remote_jid)
+        resposta_final = final_response or ""
+        if not cumprimentou and nome_cliente and resposta_final:
+            # Garante cumprimento no início
+            if not resposta_final.lower().startswith(f"olá, {nome_cliente.lower()}"):
+                resposta_final = f"Olá, {nome_cliente}!\n" + resposta_final.lstrip()
+            setar_cumprimento_cliente(remote_jid)
+        # Se já cumprimentou, remove cumprimentos duplicados
+        elif cumprimentou and nome_cliente:
+            resposta_final = re.sub(r"olá,?\s*" + re.escape(nome_cliente) + r"[!,.\s]*", "", resposta_final, flags=re.IGNORECASE)
+        # Pós-processamento extra: limpeza da resposta
+        resposta_final = limpar_resposta(resposta_final, nome_cliente, intencao)
+        if resposta_final:
+            send_whatsapp_message(phone, resposta_final)
+            console.log(f"[LOG] Mensagem enviada para WhatsApp: {resposta_final}")
         return jsonify(result)
     except Exception as e:
         console.log(f"[red]Erro inesperado no webhook: {e}")
@@ -694,6 +775,25 @@ def processar_mensagem_fila():
 
 # Para rodar o worker em thread separada (exemplo, não inicia automaticamente)
 # Thread(target=processar_mensagem_fila, daemon=True).start()
+
+def limpar_resposta(resposta, nome_cliente=None, intencao=None):
+    if not resposta:
+        return resposta
+    # Remove cumprimentos duplicados
+    if nome_cliente:
+        resposta = re.sub(r"olá,?\s*" + re.escape(nome_cliente) + r"[!,\.\s]*", "Olá, " + nome_cliente + "! ", resposta, count=1, flags=re.IGNORECASE)
+        resposta = re.sub(r"olá,?\s*" + re.escape(nome_cliente) + r"[!,\.\s]*", "", resposta, flags=re.IGNORECASE)
+        # Garante que o nome só aparece uma vez
+        resposta = re.sub(rf"({re.escape(nome_cliente)})[\s,!.]+(\1)+", r"\1", resposta, flags=re.IGNORECASE)
+    # Remove frases genéricas não solicitadas se não for intenção de boleto
+    if intencao and intencao != "consulta_boleto":
+        resposta = re.sub(r"(aqui está (seu|o) boleto[\s\S]*?\n)+", "", resposta, flags=re.IGNORECASE)
+        resposta = re.sub(r"segue o link para pagamento[\s\S]*?\n+", "", resposta, flags=re.IGNORECASE)
+        resposta = re.sub(r"já estou consultando seu contrato[\s\S]*?\n+", "", resposta, flags=re.IGNORECASE)
+    # Remove espaços e quebras de linha duplicadas
+    resposta = re.sub(r"\n{2,}", "\n", resposta)
+    resposta = re.sub(r"\s{2,}", " ", resposta)
+    return resposta.strip()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
