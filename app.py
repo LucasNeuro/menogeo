@@ -202,43 +202,46 @@ def webhook():
         result = call_mistral(messages, tools)
         print("[LOG] Resposta do Mistral:")
         pprint.pprint(result)
-        # Loop para processar tool_calls
-        while result and "choices" in result and result["choices"] and result["choices"][0]["message"].get("tool_calls"):
-            for tool_call in result["choices"][0]["message"]["tool_calls"]:
-                print("[LOG] Tool call recebida:", tool_call)
-                tool_name = tool_call["function"]["name"]
-                args = json.loads(tool_call["function"]["arguments"])
-                if tool_name == "consultar_dados_ixc":
-                    tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
-                elif tool_name == "consultar_boletos":
-                    tool_result = consultar_boletos_ixc(args["cpf"])
-                elif tool_name == "consultar_status_plano":
-                    tool_result = consultar_status_plano_ixc(args["cpf"])
-                elif tool_name == "consultar_dados_cadastro":
-                    tool_result = consultar_dados_cadastro_ixc(args["cpf"])
-                elif tool_name == "consultar_valor_plano":
-                    tool_result = consultar_valor_plano_ixc(args["cpf"])
-                elif tool_name == "transferir_para_humano":
-                    tool_result = transferir_para_humano(args["cpf"], args["resumo"])
-                elif tool_name == "abrir_os":
-                    tool_result = abrir_os(args["id_cliente"], args["motivo"])
-                else:
-                    tool_result = {"erro": "Tool não implementada"}
-                print("[LOG] Resultado da tool:", tool_result)
-                # Adiciona o resultado da tool apenas ao contexto da conversa (NÃO salva no Mem0AI)
-                messages.append({
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": json.dumps(tool_result, ensure_ascii=False)
-                })
-            # Nova chamada ao Mistral com o contexto atualizado
-            result = call_mistral(messages, tools)
-            print("[LOG] Nova resposta do Mistral após tool_call:")
-            pprint.pprint(result)
-            # Se houver resposta do assistente, salva no Mem0AI
-            if result and "choices" in result and result["choices"] and result["choices"][0]["message"]["role"] == "assistant":
-                resposta_assistente = result["choices"][0]["message"]["content"]
+        # Novo loop: processa tool_calls sempre alternando assistant/tool
+        while True:
+            msg = result["choices"][0]["message"]
+            if msg.get("tool_calls"):
+                for tool_call in msg["tool_calls"]:
+                    print("[LOG] Tool call recebida:", tool_call)
+                    tool_name = tool_call["function"]["name"]
+                    args = json.loads(tool_call["function"]["arguments"])
+                    if tool_name == "consultar_dados_ixc":
+                        tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
+                    elif tool_name == "consultar_boletos":
+                        tool_result = consultar_boletos_ixc(args["cpf"])
+                    elif tool_name == "consultar_status_plano":
+                        tool_result = consultar_status_plano_ixc(args["cpf"])
+                    elif tool_name == "consultar_dados_cadastro":
+                        tool_result = consultar_dados_cadastro_ixc(args["cpf"])
+                    elif tool_name == "consultar_valor_plano":
+                        tool_result = consultar_valor_plano_ixc(args["cpf"])
+                    elif tool_name == "transferir_para_humano":
+                        tool_result = transferir_para_humano(args["cpf"], args["resumo"])
+                    elif tool_name == "abrir_os":
+                        tool_result = abrir_os(args["id_cliente"], args["motivo"])
+                    else:
+                        tool_result = {"erro": "Tool não implementada"}
+                    print("[LOG] Resultado da tool:", tool_result)
+                    # Adiciona o resultado da tool apenas ao contexto da conversa (NÃO salva no Mem0AI)
+                    messages.append({
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": json.dumps(tool_result, ensure_ascii=False)
+                    })
+                # Após adicionar tool, faz nova chamada ao Mistral e repete o loop
+                result = call_mistral(messages, tools)
+                print("[LOG] Nova resposta do Mistral após tool_call:")
+                pprint.pprint(result)
+                continue
+            elif msg["role"] == "assistant":
+                resposta_assistente = msg["content"]
                 salvar_historico_mem0(remote_jid, phone, {"role": "assistant", "content": resposta_assistente})
+                break
         print("[LOG] Resposta final do agente:", result)
         final_response = None
         if result and "choices" in result and result["choices"]:
