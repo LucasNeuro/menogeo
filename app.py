@@ -11,6 +11,7 @@ import json
 import redis
 from threading import Thread
 import uuid
+import requests as req_deepseek
 
 load_dotenv()
 
@@ -25,6 +26,9 @@ MISTRAL_AGENT_ID = os.getenv("MISTRAL_AGENT_ID")
 MISTRAL_URL = "https://api.mistral.ai/v1/agents/completions"
 
 IXC_API_URL = os.getenv("IXC_API_URL", "https://n8n.rafaeltoshiba.com.br/webhook/ixc/consultaCliente")
+
+DEPSEEK_API_KEY = os.getenv("DEPSEEK_API_KEY")
+DEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 
 app = Flask(__name__)
 
@@ -191,6 +195,41 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
         return True
     return False
 
+# Função para classificar intenção e extrair entidades
+# Retorna: {"intencao": ..., "entidades": {...}}
+def classificar_intencao_deepseek(mensagem_usuario):
+    prompt = (
+        "Classifique a intenção da mensagem do usuário e extraia entidades relevantes.\n"
+        "Responda em JSON no formato: {\"intencao\": <string>, \"entidades\": <dict>}\n"
+        "Exemplos de intenções: consulta_boleto, suporte_internet, consulta_status_plano, consulta_cadastro, consulta_valor_plano, elogio, reclamacao, saudacao, despedida, outros.\n"
+        f"Mensagem: {mensagem_usuario}"
+    )
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "Você é um classificador de intenções para atendimento ao cliente."},
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"},
+        "max_tokens": 200
+    }
+    headers = {
+        "Authorization": f"Bearer {DEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    try:
+        response = req_deepseek.post(DEPSEEK_URL, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+        result = response.json()
+        if "choices" in result and result["choices"]:
+            content = result["choices"][0]["message"]["content"]
+            # Tenta converter para dict
+            import json as _json
+            return _json.loads(content)
+    except Exception as e:
+        print(f"[DeepSeek][ERRO] Falha ao classificar intenção: {str(e)}")
+    return {"intencao": "outros", "entidades": {}}
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -313,6 +352,25 @@ def webhook():
 
         # Salvar mensagem do usuário no Mem0AI
         salvar_historico_mem0(remote_jid, phone, {"role": "user", "content": user_message})
+
+        # Classificar intenção do usuário
+        classificacao = classificar_intencao_deepseek(user_message)
+        intencao = classificacao.get("intencao", "outros")
+        entidades = classificacao.get("entidades", {})
+        print(f"[DeepSeek] Intenção detectada: {intencao} | Entidades: {entidades}")
+        # Se for saudação, elogio ou despedida, responder cordialmente
+        if intencao in ["saudacao", "elogio", "despedida"]:
+            resposta = "Olá! Como posso te ajudar hoje?"
+            if intencao == "despedida":
+                resposta = "Obrigado pelo contato! Se precisar de algo, estou à disposição."
+            send_whatsapp_message(phone, resposta)
+            return jsonify({"status": "ok", "intencao": intencao})
+        # Se for outros, pedir para ser mais específico
+        if intencao == "outros":
+            resposta = "Não entendi seu pedido. Pode ser mais específico? Por exemplo: 'quero meu boleto', 'estou sem internet', etc."
+            send_whatsapp_message(phone, resposta)
+            return jsonify({"status": "ok", "intencao": intencao})
+        # Se for intenção clara, seguir fluxo normal (já existente)
 
         result = call_mistral(messages, tools)
         print("[LOG] Resposta do Mistral:")
