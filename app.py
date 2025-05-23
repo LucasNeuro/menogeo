@@ -9,6 +9,8 @@ from rich.console import Console
 import pprint
 import json
 import redis
+from threading import Thread
+import uuid
 
 load_dotenv()
 
@@ -49,6 +51,7 @@ PROMPT = (
     "- Responda de forma clara, cordial, com listas, tópicos em negrito e poucos emojis, adaptando para leitura no WhatsApp.\n"
     "- Nunca envie informações não solicitadas e só peça dados ao backend se realmente necessário.\n"
     "- Se não conseguir resolver, oriente o usuário a falar com um atendente humano.\n"
+    "- Ao final de cada atendimento, sempre sugira de forma cordial o que o cliente pode fazer a seguir, como: 'Posso te ajudar com mais alguma coisa, {nome_cliente}?'.\n"
     "\n"
     "Exemplos de respostas personalizadas usando dados do IXC:\n"
     "- Para consulta de boleto: 'Olá, {nome_cliente}! Seu boleto de R$ {valor} vence em {data_vencimento}. Segue o link para pagamento: {url_pdf}. Se precisar do código de barras: {linha_digitavel}'\n"
@@ -177,10 +180,10 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
     if is_cpf(message):
         # Salva o CPF no contexto
         salvar_cpf_contexto(remoteJid, message)
-        # Busca no Mem0AI
+        # Busca no Redis
         dados_ixc = buscar_ixc_redis(remoteJid, message)
         if not dados_ixc:
-            dados_ixc = consultar_dados_ixc(message)
+            dados_ixc = consultar_dados_ixc(message, remoteJid)
             salvar_ixc_redis(remoteJid, message, dados_ixc)
         print(f"[LOG] Dados IXC retornados para CPF {message}: {dados_ixc}")
         # Salva apenas a mensagem do usuário no histórico Mem0AI
@@ -217,55 +220,45 @@ def webhook():
             console.log(f"[red]Payload inesperado ou número inválido: {data}")
             return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
+        # Se o usuário informar um CPF válido, consultar e salvar dados do IXC
+        if is_cpf(user_message):
+            salvar_cpf_contexto(remote_jid, user_message)
+            dados_ixc = buscar_ixc_redis(remote_jid, user_message)
+            if not dados_ixc:
+                dados_ixc = consultar_dados_ixc(user_message, remote_jid)
+                salvar_ixc_redis(remote_jid, user_message, dados_ixc)
+            console.log(f"[LOG] CPF informado e dados IXC salvos: {user_message} -> {dados_ixc}")
+
         # Garante que o CPF está no contexto
         cpf_contexto = garantir_cpf_contexto(remote_jid, user_message)
         console.log(f"[LOG] CPF no contexto: {cpf_contexto}")
 
-        # Nunca pede o CPF novamente se já estiver no contexto
-        # (Se não houver CPF, o fluxo pode ser ajustado para pedir, mas nunca repetidamente)
         if not cpf_contexto:
             console.log(f"[LOG] CPF não encontrado no contexto. Solicitando ao usuário.")
             resposta = "Por favor, informe seu CPF (apenas números) para que eu possa te ajudar."
             send_whatsapp_message(phone, resposta)
             return jsonify({"status": "aguardando_cpf"})
 
+        # Buscar dados do IXC do Redis, se não houver, consultar e salvar
+        dados_ixc = buscar_ixc_redis(remote_jid, cpf_contexto)
+        if not dados_ixc:
+            dados_ixc = consultar_dados_ixc(cpf_contexto, remote_jid)
+            salvar_ixc_redis(remote_jid, cpf_contexto, dados_ixc)
+        console.log(f"[LOG] Dados IXC usados para contexto: {dados_ixc}")
+
         # Buscar histórico do Mem0AI (apenas user/assistant)
         historico = buscar_historico_mem0(remote_jid, phone)
         console.log(f"[LOG] Histórico Mem0AI retornado: {historico}")
+
         # Montar contexto para o Mistral
         messages = [{"role": "system", "content": PROMPT}]
-        # Ajuste: alternar user/assistant corretamente
-        if historico and isinstance(historico, dict) and "results" in historico:
-            hist_msgs = [m for m in mem0_to_mistral_messages(historico["results"]) if m.get("role") in ("user", "assistant")]
-        elif historico and isinstance(historico, list):
-            hist_msgs = [m for m in mem0_to_mistral_messages(historico) if m.get("role") in ("user", "assistant")]
-        else:
-            hist_msgs = []
-        last_role = None
-        for m in hist_msgs:
-            if last_role == m.get("role") == "user":
-                continue  # pula user duplicado
-            messages.append(m)
-            last_role = m.get("role")
-        if last_role != "user":
-            messages.append({"role": "user", "content": user_message})
-        print("\n[LOG] Enviando para Mistral:")
-        pprint.pprint(messages)
-        console.log(f"[LOG] Mensagens enviadas para Mistral: {messages}")
-
-        # Salvar mensagem do usuário no Mem0AI
-        salvar_historico_mem0(remote_jid, phone, {"role": "user", "content": user_message})
-
-        # Buscar nome do cliente do IXC para personalizar respostas
+        # Adicionar dados do contrato/cliente do Redis ao contexto
         nome_cliente = None
         status_contrato = None
-        if cpf_contexto:
-            dados_ixc = buscar_ixc_redis(remote_jid, cpf_contexto)
-            if dados_ixc and 'cliente' in dados_ixc:
-                nome_cliente = dados_ixc['cliente'].get('razao_social') or dados_ixc['cliente'].get('nome')
-            if dados_ixc and 'contrato' in dados_ixc:
-                status_contrato = dados_ixc['contrato'].get('status')
-        # Adiciona nome e status do cliente ao contexto se disponível
+        if dados_ixc and 'cliente' in dados_ixc:
+            nome_cliente = dados_ixc['cliente'].get('razao_social') or dados_ixc['cliente'].get('nome')
+        if dados_ixc and 'contrato' in dados_ixc:
+            status_contrato = dados_ixc['contrato'].get('status')
         contexto_cliente = []
         if nome_cliente:
             contexto_cliente.append(f"O nome do cliente é {nome_cliente}.")
@@ -274,6 +267,37 @@ def webhook():
         if contexto_cliente:
             messages.append({"role": "system", "content": " ".join(contexto_cliente)})
         console.log(f"[LOG] Contexto do cliente adicionado ao Mistral: {contexto_cliente}")
+
+        # Adicionar dados relevantes do Mem0AI ao contexto (ex: nome, endereço, status)
+        if historico and isinstance(historico, dict) and "results" in historico:
+            for m in historico["results"]:
+                if isinstance(m, dict) and m.get("memory"):
+                    # Adiciona como system se for dado pessoal relevante
+                    if any(x in m["memory"].lower() for x in ["cpf", "endereço", "address", "contrato", "boleto", "status", "nome"]):
+                        messages.append({"role": "system", "content": m["memory"]})
+        # Adicionar histórico user/assistant (últimas 10 interações)
+        hist_msgs = []
+        if historico and isinstance(historico, dict) and "results" in historico:
+            hist_msgs = [m for m in mem0_to_mistral_messages(historico["results"]) if m.get("role") in ("user", "assistant")]
+        elif historico and isinstance(historico, list):
+            hist_msgs = [m for m in mem0_to_mistral_messages(historico) if m.get("role") in ("user", "assistant")]
+        # Remove duplicidade e pega só as últimas 10
+        last_msgs = []
+        last_role = None
+        for m in hist_msgs[-10:]:
+            if last_role == m.get("role") == "user":
+                continue  # pula user duplicado
+            last_msgs.append(m)
+            last_role = m.get("role")
+        messages.extend(last_msgs)
+        if last_role != "user":
+            messages.append({"role": "user", "content": user_message})
+        print("\n[LOG] Enviando para Mistral:")
+        pprint.pprint(messages)
+        console.log(f"[LOG] Mensagens enviadas para Mistral: {messages}")
+
+        # Salvar mensagem do usuário no Mem0AI
+        salvar_historico_mem0(remote_jid, phone, {"role": "user", "content": user_message})
 
         result = call_mistral(messages, tools)
         print("[LOG] Resposta do Mistral:")
@@ -320,6 +344,7 @@ def webhook():
                         console.log(f"[LOG] Resultado da tool transferir_para_humano: {tool_result}")
                     elif tool_name == "consultar_dados_ixc":
                         tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
+                        salvar_ixc_redis(remote_jid, args["cpf"], tool_result)
                         console.log(f"[LOG] Resultado da tool consultar_dados_ixc: {tool_result}")
                     elif tool_name == "consultar_boletos":
                         tool_result = consultar_boletos_ixc(args["cpf"], remote_jid)
@@ -366,6 +391,16 @@ def webhook():
         final_response = None
         if result and "choices" in result and result["choices"]:
             final_response = result["choices"][0]["message"]["content"]
+        # Pós-processamento: garantir sugestão de próximos passos
+        if final_response:
+            sugestao = None
+            if nome_cliente:
+                sugestao = f"\n\nPosso te ajudar com mais alguma coisa, {nome_cliente}?"
+            else:
+                sugestao = "\n\nPosso te ajudar com mais alguma coisa?"
+            # Só adiciona sugestão se não houver algo similar já na resposta
+            if sugestao.strip().lower() not in final_response.strip().lower():
+                final_response = final_response.strip() + sugestao
         if final_response:
             send_whatsapp_message(phone, final_response)
             console.log(f"[LOG] Mensagem enviada para WhatsApp: {final_response}")
@@ -624,6 +659,39 @@ def consultar_valor_plano_ixc(cpf, remoteJid=None):
             return cache['valor_plano']
     dados = consultar_dados_ixc(cpf, remoteJid)
     return dados.get('valor_plano', dados)
+
+# --- SISTEMA DE FILAS COM REDIS ---
+# Webhook apenas enfileira mensagem, processamento é feito por worker
+
+def enqueue_message(data):
+    msg_id = str(uuid.uuid4())
+    redis_client.lpush("fila:mensagens", json.dumps({"id": msg_id, "data": data}))
+    console.log(f"[FILA] Mensagem enfileirada com id {msg_id}")
+    return msg_id
+
+@app.route("/webhook_fila", methods=["POST"])
+def webhook_fila():
+    data = request.json
+    enqueue_message(data)
+    return jsonify({"status": "enfileirado"})
+
+# Worker para processar mensagens da fila
+
+def processar_mensagem_fila():
+    while True:
+        item = redis_client.brpop("fila:mensagens", timeout=5)
+        if item:
+            _, raw = item
+            try:
+                msg = json.loads(raw)
+                console.log(f"[FILA] Processando mensagem id {msg['id']}")
+                # Aqui você pode chamar a função webhook() ou refatorar o processamento para ser reutilizável
+                # Exemplo: processar_payload(msg['data'])
+            except Exception as e:
+                console.log(f"[FILA][ERRO] Falha ao processar mensagem da fila: {str(e)} | Raw: {raw}")
+
+# Para rodar o worker em thread separada (exemplo, não inicia automaticamente)
+# Thread(target=processar_mensagem_fila, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
