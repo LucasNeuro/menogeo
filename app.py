@@ -8,6 +8,7 @@ from rich import print as rprint
 from rich.console import Console
 import pprint
 import json
+import redis
 
 load_dotenv()
 
@@ -130,6 +131,13 @@ tools = [
 os.environ["MEM0_API_KEY"] = os.getenv("MEM0_API_KEY")
 mem0_client = MemoryClient()
 
+# Configuração do Redis
+redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+redis_client = redis.StrictRedis.from_url(redis_url, decode_responses=True)
+
+# Helpers para cache IXC no Redis
+REDIS_TTL_IXC = 60 * 30  # 30 minutos
+
 def get_namespace(remoteJid, cpf):
     return f"conversa:{remoteJid}:{cpf}:"
 
@@ -137,10 +145,10 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
     # Detecta se é um CPF válido
     if is_cpf(message):
         # Busca no Mem0AI
-        dados_ixc = buscar_ixc_mem0(remoteJid, message)
+        dados_ixc = buscar_ixc_redis(remoteJid, message)
         if not dados_ixc:
             dados_ixc = consultar_dados_ixc(message)
-            salvar_ixc_mem0(remoteJid, message, dados_ixc)
+            salvar_ixc_redis(remoteJid, message, dados_ixc)
         print(f"[LOG] Dados IXC retornados para CPF {message}: {dados_ixc}")
         # Salva apenas a mensagem do usuário no histórico Mem0AI
         salvar_historico_mem0(remoteJid, message, {"role": "user", "content": message})
@@ -337,9 +345,9 @@ def consultar_status_plano(id_cliente):
 
 def consultar_dados_ixc(cpf, remoteJid=None):
     if remoteJid:
-        cache = buscar_ixc_mem0(remoteJid, cpf)
+        cache = buscar_ixc_redis(remoteJid, cpf)
         if cache:
-            print(f"[LOG] Usando dados do IXC do cache para CPF {cpf}")
+            print(f"[LOG] Usando dados do IXC do cache Redis para CPF {cpf}")
             return cache
     payload = {"cpf": cpf}
     try:
@@ -348,7 +356,7 @@ def consultar_dados_ixc(cpf, remoteJid=None):
         data = response.json()
         print("[LOG] Dados retornados do IXC para CPF", cpf, ":", json.dumps(data, ensure_ascii=False, indent=2))
         if remoteJid:
-            salvar_ixc_mem0(remoteJid, cpf, data)
+            salvar_ixc_redis(remoteJid, cpf, data)
         return data
     except requests.exceptions.Timeout:
         return {"erro": "Timeout ao consultar IXC"}
@@ -408,20 +416,15 @@ def buscar_historico_mem0(remoteJid, cpf, page=1, page_size=50):
     user_id = f"{remoteJid}:{cpf}"
     return mem0_client.get_all(user_id=user_id, page=page, page_size=page_size)
 
-def salvar_ixc_mem0(remoteJid, cpf, dados_ixc):
-    user_id = f"{remoteJid}:{cpf}"
-    mem0_client.add([{
-        "role": "tool",
-        "name": "consultar_dados_ixc",
-        "content": json.dumps(dados_ixc, ensure_ascii=False)
-    }], user_id=user_id, agent_id="geovana")
+def salvar_ixc_redis(remoteJid, cpf, dados_ixc):
+    key = f"conversa:{remoteJid}:{cpf}:ixc"
+    redis_client.setex(key, REDIS_TTL_IXC, json.dumps(dados_ixc, ensure_ascii=False))
 
-def buscar_ixc_mem0(remoteJid, cpf):
-    user_id = f"{remoteJid}:{cpf}"
-    memories = mem0_client.search("consultar_dados_ixc", user_id=user_id)
-    if memories:
-        # Retorna o conteúdo mais recente
-        return json.loads(memories[0]["content"])
+def buscar_ixc_redis(remoteJid, cpf):
+    key = f"conversa:{remoteJid}:{cpf}:ixc"
+    val = redis_client.get(key)
+    if val:
+        return json.loads(val)
     return None
 
 def mem0_to_mistral_messages(memories):
