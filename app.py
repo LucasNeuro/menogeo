@@ -272,6 +272,7 @@ def webhook():
                     messages.append({
                         "role": "tool",
                         "name": tool_name,
+                        "tool_call_id": tool_call["id"],
                         "content": json.dumps(tool_result, ensure_ascii=False)
                     })
                 result = call_mistral(messages, tools)
