@@ -318,9 +318,95 @@ def webhook():
         print("[LOG] Resposta do Mistral:")
         pprint.pprint(result)
         console.log(f"[LOG] Resposta do Mistral recebida: {result}")
-        final_response = None
-        if result and "choices" in result and result["choices"]:
-            final_response = result["choices"][0]["message"]["content"]
+
+        # Novo ciclo robusto de tool_calls
+        max_toolcall_loops = 6
+        toolcall_loops = 0
+        while True:
+            toolcall_loops += 1
+            if toolcall_loops > max_toolcall_loops:
+                erro_msg = "Desculpe, não consegui processar sua solicitação agora. Por favor, tente novamente ou fale com um atendente."
+                send_whatsapp_message(phone, erro_msg)
+                console.log(f"[ERRO] Excesso de ciclos de tool_call. Abortando para evitar loop infinito.")
+                return jsonify({"error": "tool_call_loop_exceeded"}), 500
+            msg = result["choices"][0]["message"]
+            # Se houver tool_calls, processa todas
+            if msg.get("tool_calls"):
+                if messages[-1]["role"] != "assistant":
+                    messages.append({
+                        "role": "assistant",
+                        "content": msg.get("content", ""),
+                        "tool_calls": msg["tool_calls"]
+                    })
+                for tool_call in msg["tool_calls"]:
+                    print("[LOG] Tool call recebida:", tool_call)
+                    console.log(f"[LOG] Tool call recebida: {tool_call}")
+                    tool_name = tool_call["function"]["name"]
+                    args = json.loads(tool_call["function"]["arguments"])
+                    console.log(f"[LOG] Tool call: {tool_name} | Args: {args}")
+                    # Sempre injeta o CPF do contexto se não informado
+                    if "cpf" in args and (not args["cpf"] or not is_cpf(args["cpf"])):
+                        if cpf_contexto:
+                            args["cpf"] = cpf_contexto
+                    # Gera resumo do atendimento para humano se for transferir
+                    if tool_name == "transferir_para_humano":
+                        historico = buscar_historico_mem0(remote_jid, phone)
+                        resumo = "Resumo do atendimento: "
+                        if historico and isinstance(historico, dict) and "results" in historico:
+                            for m in mem0_to_mistral_messages(historico["results"]):
+                                if m.get("role") in ("user", "assistant"):
+                                    resumo += f"\n[{m['role']}] {m['content']}"
+                        console.log(f"[LOG] Resumo gerado para humano: {resumo}")
+                        tool_result = transferir_para_humano(args["cpf"], resumo)
+                        console.log(f"[LOG] Resultado da tool transferir_para_humano: {tool_result}")
+                    elif tool_name == "consultar_dados_ixc":
+                        tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
+                        salvar_ixc_redis(remote_jid, args["cpf"], tool_result)
+                        console.log(f"[LOG] Resultado da tool consultar_dados_ixc: {tool_result}")
+                    elif tool_name == "consultar_boletos":
+                        tool_result = consultar_boletos_ixc(args["cpf"], remote_jid)
+                        console.log(f"[LOG] Resultado da tool consultar_boletos: {tool_result}")
+                    elif tool_name == "consultar_status_plano":
+                        tool_result = consultar_status_plano_ixc(args["cpf"], remote_jid)
+                        console.log(f"[LOG] Resultado da tool consultar_status_plano: {tool_result}")
+                    elif tool_name == "consultar_dados_cadastro":
+                        tool_result = consultar_dados_cadastro_ixc(args["cpf"], remote_jid)
+                        console.log(f"[LOG] Resultado da tool consultar_dados_cadastro: {tool_result}")
+                    elif tool_name == "consultar_valor_plano":
+                        tool_result = consultar_valor_plano_ixc(args["cpf"], remote_jid)
+                        console.log(f"[LOG] Resultado da tool consultar_valor_plano: {tool_result}")
+                    elif tool_name == "abrir_os":
+                        tool_result = abrir_os(args["id_cliente"], args["motivo"])
+                        console.log(f"[LOG] Resultado da tool abrir_os: {tool_result}")
+                    else:
+                        tool_result = {"erro": "Tool não implementada"}
+                        console.log(f"[LOG] Tool não implementada: {tool_name}")
+                    print("[LOG] Resultado da tool:", tool_result)
+                    messages.append({
+                        "role": "tool",
+                        "name": tool_name,
+                        "tool_call_id": tool_call["id"],
+                        "content": json.dumps(tool_result, ensure_ascii=False)
+                    })
+                result = call_mistral(messages, tools)
+                print("[LOG] Nova resposta do Mistral após tool_call:")
+                pprint.pprint(result)
+                console.log(f"[LOG] Nova resposta do Mistral após tool_call: {result}")
+                continue
+            # Se for resposta final do assistente
+            elif msg.get("role") == "assistant":
+                resposta_assistente = msg.get("content", "")
+                salvar_historico_mem0(remote_jid, phone, {"role": "assistant", "content": resposta_assistente})
+                console.log(f"[LOG] Resposta final do assistente: {resposta_assistente}")
+                final_response = resposta_assistente
+                break
+            else:
+                print(f"[ERRO] Resposta inesperada do Mistral: {msg}")
+                console.log(f"[ERRO] Resposta inesperada do Mistral: {msg}")
+                erro_msg = "Desculpe, não consegui processar sua solicitação. Pode tentar novamente?"
+                send_whatsapp_message(phone, erro_msg)
+                return jsonify({"error": "unexpected_mistral_response"}), 500
+
         # Pós-processamento: garantir sugestão de próximos passos
         if final_response:
             # Validação: garantir que nome/boletos apresentados batem com o contexto do Redis/IXC
@@ -339,6 +425,12 @@ def webhook():
             # Só adiciona sugestão se não houver algo similar já na resposta
             if sugestao.strip().lower() not in final_response.strip().lower():
                 final_response = final_response.strip() + sugestao
+        # Se a resposta for vazia ou incoerente, envia mensagem padrão
+        if not final_response or len(final_response.strip()) < 3:
+            erro_msg = "Desculpe, não consegui entender sua solicitação. Pode tentar novamente ou falar com um atendente?"
+            send_whatsapp_message(phone, erro_msg)
+            console.log(f"[ERRO] Resposta vazia ou incoerente enviada ao usuário.")
+            return jsonify({"error": "empty_or_incoherent_response"}), 500
         if final_response:
             send_whatsapp_message(phone, final_response)
             console.log(f"[LOG] Mensagem enviada para WhatsApp: {final_response}")
