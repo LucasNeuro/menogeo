@@ -191,30 +191,6 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
         return True
     return False
 
-# --- Função para detectar intenção do usuário ---
-def detectar_intencao(msg):
-    if not msg: return None
-    texto = msg.lower()
-    if any(x in texto for x in ["boleto", "fatura", "2ª via", "segunda via", "pagar conta"]):
-        return "boleto"
-    if any(x in texto for x in ["status", "plano", "internet", "conexão", "conexao", "sem internet", "fora do ar"]):
-        return "status"
-    if any(x in texto for x in ["cadastro", "meus dados", "dados cadastrais", "meu endereço"]):
-        return "cadastro"
-    if any(x in texto for x in ["valor do plano", "mensalidade", "quanto pago"]):
-        return "valor_plano"
-    if any(x in texto for x in ["abrir os", "suporte", "ordem de serviço", "chamar técnico"]):
-        return "abrir_os"
-    if any(x in texto for x in ["humano", "atendente", "falar com atendente", "transferir"]):
-        return "transferir_para_humano"
-    if any(x in texto for x in ["reclamação", "elogio"]):
-        return "reclamacao_elogio"
-    if any(x in texto for x in ["ajuda", "suporte", "preciso de ajuda"]):
-        return "ajuda"
-    if any(x in texto for x in ["ola", "olá", "bom dia", "boa tarde", "boa noite"]):
-        return "cumprimento"
-    return None
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -244,32 +220,6 @@ def webhook():
             console.log(f"[red]Payload inesperado ou número inválido: {data}")
             return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
-        intencao = detectar_intencao(user_message)
-        # Flag de cumprimento no Redis
-        cumprimentou_key = f"conversa:{remote_jid}:cumprimentou"
-        cumprimentou = redis_client.get(cumprimentou_key)
-        # Se for só cumprimento, responde apenas com cumprimento cordial
-        if intencao == "cumprimento":
-            nome_cliente = None
-            dados_ixc = None
-            cpf_contexto = get_cpf_from_context(remote_jid)
-            if cpf_contexto:
-                dados_ixc = buscar_ixc_redis(remote_jid, cpf_contexto)
-                if dados_ixc and 'cliente' in dados_ixc:
-                    nome_cliente = dados_ixc['cliente'].get('razao_social') or dados_ixc['cliente'].get('nome')
-            if not cumprimentou:
-                resposta = f"Olá, {nome_cliente}! Como posso ajudar?" if nome_cliente else "Olá! Como posso ajudar?"
-                redis_client.setex(cumprimentou_key, 3600, "1")
-            else:
-                resposta = "Como posso ajudar?"
-            send_whatsapp_message(phone, resposta)
-            return jsonify({"status": "cumprimento"})
-        # Se não for intenção clara, responde pedindo para o usuário explicar o que deseja
-        if not intencao:
-            resposta = "Por favor, me diga como posso te ajudar (ex: boleto, status do plano, cadastro, etc)."
-            send_whatsapp_message(phone, resposta)
-            return jsonify({"status": "aguardando_intencao"})
-        # Se for intenção sensível, segue fluxo normal (CPF/contexto, etc)
         # Se o usuário informar um CPF válido, consultar e salvar dados do IXC
         if is_cpf(user_message):
             salvar_cpf_contexto(remote_jid, user_message)
