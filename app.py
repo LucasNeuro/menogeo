@@ -148,11 +148,26 @@ REDIS_TTL_IXC = 60 * 30  # 30 minutos
 def get_cpf_from_context(remoteJid):
     key = f"conversa:{remoteJid}:cpf"
     cpf = redis_client.get(key)
-    return cpf
+    if cpf and is_cpf(cpf):
+        return cpf
+    return None
 
 def salvar_cpf_contexto(remoteJid, cpf):
-    key = f"conversa:{remoteJid}:cpf"
-    redis_client.setex(key, REDIS_TTL_IXC, cpf)
+    if is_cpf(cpf):
+        key = f"conversa:{remoteJid}:cpf"
+        redis_client.setex(key, REDIS_TTL_IXC, cpf)
+
+# Função para garantir que o CPF está no contexto antes de qualquer consulta
+# Se não estiver, retorna None e a função chamadora deve lidar com isso
+
+def garantir_cpf_contexto(remoteJid, user_message=None):
+    cpf = get_cpf_from_context(remoteJid)
+    if cpf:
+        return cpf
+    if user_message and is_cpf(user_message):
+        salvar_cpf_contexto(remoteJid, user_message)
+        return user_message
+    return None
 
 def get_namespace(remoteJid, cpf):
     return f"conversa:{remoteJid}:{cpf}:"
@@ -180,6 +195,7 @@ def webhook():
         logs = []
         console.rule("[bold green]Webhook Recebido")
         rprint(data)
+        console.log(f"[LOG] Payload recebido: {json.dumps(data, ensure_ascii=False)}")
 
         if data.get("fromMe") or data.get("key", {}).get("fromMe") or data.get("isGroup") or data.get("broadcast"):
             console.log("[yellow] Ignorando mensagem enviada pelo próprio bot, grupo ou broadcast.")
@@ -201,15 +217,21 @@ def webhook():
             console.log(f"[red]Payload inesperado ou número inválido: {data}")
             return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
-        # Detecta e salva CPF se informado
-        if is_cpf(user_message):
-            salvar_cpf_contexto(remote_jid, user_message)
+        # Garante que o CPF está no contexto
+        cpf_contexto = garantir_cpf_contexto(remote_jid, user_message)
+        console.log(f"[LOG] CPF no contexto: {cpf_contexto}")
 
-        # Buscar CPF do contexto se não informado
-        cpf_contexto = get_cpf_from_context(remote_jid)
+        # Nunca pede o CPF novamente se já estiver no contexto
+        # (Se não houver CPF, o fluxo pode ser ajustado para pedir, mas nunca repetidamente)
+        if not cpf_contexto:
+            console.log(f"[LOG] CPF não encontrado no contexto. Solicitando ao usuário.")
+            resposta = "Por favor, informe seu CPF (apenas números) para que eu possa te ajudar."
+            send_whatsapp_message(phone, resposta)
+            return jsonify({"status": "aguardando_cpf"})
 
         # Buscar histórico do Mem0AI (apenas user/assistant)
         historico = buscar_historico_mem0(remote_jid, phone)
+        console.log(f"[LOG] Histórico Mem0AI retornado: {historico}")
         # Montar contexto para o Mistral
         messages = [{"role": "system", "content": PROMPT}]
         # Ajuste: alternar user/assistant corretamente
@@ -229,26 +251,45 @@ def webhook():
             messages.append({"role": "user", "content": user_message})
         print("\n[LOG] Enviando para Mistral:")
         pprint.pprint(messages)
+        console.log(f"[LOG] Mensagens enviadas para Mistral: {messages}")
 
         # Salvar mensagem do usuário no Mem0AI
         salvar_historico_mem0(remote_jid, phone, {"role": "user", "content": user_message})
 
         # Buscar nome do cliente do IXC para personalizar respostas
         nome_cliente = None
+        status_contrato = None
         if cpf_contexto:
             dados_ixc = buscar_ixc_redis(remote_jid, cpf_contexto)
             if dados_ixc and 'cliente' in dados_ixc:
                 nome_cliente = dados_ixc['cliente'].get('razao_social') or dados_ixc['cliente'].get('nome')
-        # Adiciona nome do cliente ao contexto se disponível
+            if dados_ixc and 'contrato' in dados_ixc:
+                status_contrato = dados_ixc['contrato'].get('status')
+        # Adiciona nome e status do cliente ao contexto se disponível
+        contexto_cliente = []
         if nome_cliente:
-            messages.append({"role": "system", "content": f"O nome do cliente é {nome_cliente}."})
+            contexto_cliente.append(f"O nome do cliente é {nome_cliente}.")
+        if status_contrato:
+            contexto_cliente.append(f"O status do contrato do cliente é {status_contrato}.")
+        if contexto_cliente:
+            messages.append({"role": "system", "content": " ".join(contexto_cliente)})
+        console.log(f"[LOG] Contexto do cliente adicionado ao Mistral: {contexto_cliente}")
 
         result = call_mistral(messages, tools)
         print("[LOG] Resposta do Mistral:")
         pprint.pprint(result)
+        console.log(f"[LOG] Resposta do Mistral recebida: {result}")
         # Novo loop: processa tool_calls sempre alternando assistant/tool
+        max_toolcall_loops = 8
+        toolcall_loops = 0
         while True:
+            toolcall_loops += 1
+            if toolcall_loops > max_toolcall_loops:
+                print("[ERRO] Excesso de ciclos de tool_call. Abortando para evitar loop infinito.")
+                console.log("[ERRO] Excesso de ciclos de tool_call. Abortando para evitar loop infinito.")
+                break
             msg = result["choices"][0]["message"]
+            # Se houver tool_calls, processa todas
             if msg.get("tool_calls"):
                 if messages[-1]["role"] != "assistant":
                     messages.append({
@@ -258,36 +299,46 @@ def webhook():
                     })
                 for tool_call in msg["tool_calls"]:
                     print("[LOG] Tool call recebida:", tool_call)
+                    console.log(f"[LOG] Tool call recebida: {tool_call}")
                     tool_name = tool_call["function"]["name"]
                     args = json.loads(tool_call["function"]["arguments"])
+                    console.log(f"[LOG] Tool call: {tool_name} | Args: {args}")
                     # Sempre injeta o CPF do contexto se não informado
                     if "cpf" in args and (not args["cpf"] or not is_cpf(args["cpf"])):
                         if cpf_contexto:
                             args["cpf"] = cpf_contexto
                     # Gera resumo do atendimento para humano se for transferir
                     if tool_name == "transferir_para_humano":
-                        # Gera resumo usando o Mistral
                         historico = buscar_historico_mem0(remote_jid, phone)
                         resumo = "Resumo do atendimento: "
                         if historico and isinstance(historico, dict) and "results" in historico:
                             for m in mem0_to_mistral_messages(historico["results"]):
                                 if m.get("role") in ("user", "assistant"):
                                     resumo += f"\n[{m['role']}] {m['content']}"
+                        console.log(f"[LOG] Resumo gerado para humano: {resumo}")
                         tool_result = transferir_para_humano(args["cpf"], resumo)
+                        console.log(f"[LOG] Resultado da tool transferir_para_humano: {tool_result}")
                     elif tool_name == "consultar_dados_ixc":
                         tool_result = consultar_dados_ixc(args["cpf"], remote_jid)
+                        console.log(f"[LOG] Resultado da tool consultar_dados_ixc: {tool_result}")
                     elif tool_name == "consultar_boletos":
-                        tool_result = consultar_boletos_ixc(args["cpf"])
+                        tool_result = consultar_boletos_ixc(args["cpf"], remote_jid)
+                        console.log(f"[LOG] Resultado da tool consultar_boletos: {tool_result}")
                     elif tool_name == "consultar_status_plano":
-                        tool_result = consultar_status_plano_ixc(args["cpf"])
+                        tool_result = consultar_status_plano_ixc(args["cpf"], remote_jid)
+                        console.log(f"[LOG] Resultado da tool consultar_status_plano: {tool_result}")
                     elif tool_name == "consultar_dados_cadastro":
-                        tool_result = consultar_dados_cadastro_ixc(args["cpf"])
+                        tool_result = consultar_dados_cadastro_ixc(args["cpf"], remote_jid)
+                        console.log(f"[LOG] Resultado da tool consultar_dados_cadastro: {tool_result}")
                     elif tool_name == "consultar_valor_plano":
-                        tool_result = consultar_valor_plano_ixc(args["cpf"])
+                        tool_result = consultar_valor_plano_ixc(args["cpf"], remote_jid)
+                        console.log(f"[LOG] Resultado da tool consultar_valor_plano: {tool_result}")
                     elif tool_name == "abrir_os":
                         tool_result = abrir_os(args["id_cliente"], args["motivo"])
+                        console.log(f"[LOG] Resultado da tool abrir_os: {tool_result}")
                     else:
                         tool_result = {"erro": "Tool não implementada"}
+                        console.log(f"[LOG] Tool não implementada: {tool_name}")
                     print("[LOG] Resultado da tool:", tool_result)
                     messages.append({
                         "role": "tool",
@@ -298,20 +349,30 @@ def webhook():
                 result = call_mistral(messages, tools)
                 print("[LOG] Nova resposta do Mistral após tool_call:")
                 pprint.pprint(result)
+                console.log(f"[LOG] Nova resposta do Mistral após tool_call: {result}")
                 continue
-            elif msg["role"] == "assistant":
-                resposta_assistente = msg["content"]
+            # Se for resposta final do assistente
+            elif msg.get("role") == "assistant":
+                resposta_assistente = msg.get("content", "")
                 salvar_historico_mem0(remote_jid, phone, {"role": "assistant", "content": resposta_assistente})
+                console.log(f"[LOG] Resposta final do assistente: {resposta_assistente}")
+                break
+            else:
+                print(f"[ERRO] Resposta inesperada do Mistral: {msg}")
+                console.log(f"[ERRO] Resposta inesperada do Mistral: {msg}")
                 break
         print("[LOG] Resposta final do agente:", result)
+        console.log(f"[LOG] Resposta final do agente: {result}")
         final_response = None
         if result and "choices" in result and result["choices"]:
             final_response = result["choices"][0]["message"]["content"]
         if final_response:
             send_whatsapp_message(phone, final_response)
+            console.log(f"[LOG] Mensagem enviada para WhatsApp: {final_response}")
         return jsonify(result)
     except Exception as e:
         console.log(f"[red]Erro inesperado no webhook: {e}")
+        console.log(f"[LOG][ERRO] Exceção capturada: {str(e)} | Payload: {json.dumps(request.json, ensure_ascii=False) if request.json else ''}")
         return jsonify({"error": str(e)}), 500
 
 def send_to_mistral(user_message):
@@ -520,9 +581,49 @@ def transferir_para_humano(cpf, resumo):
     try:
         response = requests.post(url, json=payload, timeout=30)
         response.raise_for_status()
+        console.log(f"[LOG] Resumo enviado para Make.com: {payload}")
         return {"status": "Transferido para humano", "resumo": resumo}
     except Exception as e:
+        console.log(f"[LOG][ERRO] Falha ao transferir para humano: {str(e)} | Payload: {payload}")
         return {"erro": str(e)}
+
+# Funções auxiliares para consultar dados específicos usando o cache geral do IXC
+
+def consultar_boletos_ixc(cpf, remoteJid=None):
+    if remoteJid:
+        cache = buscar_ixc_redis(remoteJid, cpf)
+        if cache and 'boletos' in cache:
+            print(f"[LOG] Usando boletos do cache IXC para CPF {cpf}")
+            return cache['boletos']
+    dados = consultar_dados_ixc(cpf, remoteJid)
+    return dados.get('boletos', dados)
+
+def consultar_status_plano_ixc(cpf, remoteJid=None):
+    if remoteJid:
+        cache = buscar_ixc_redis(remoteJid, cpf)
+        if cache and 'status_plano' in cache:
+            print(f"[LOG] Usando status_plano do cache IXC para CPF {cpf}")
+            return cache['status_plano']
+    dados = consultar_dados_ixc(cpf, remoteJid)
+    return dados.get('status_plano', dados)
+
+def consultar_dados_cadastro_ixc(cpf, remoteJid=None):
+    if remoteJid:
+        cache = buscar_ixc_redis(remoteJid, cpf)
+        if cache and 'cadastro' in cache:
+            print(f"[LOG] Usando cadastro do cache IXC para CPF {cpf}")
+            return cache['cadastro']
+    dados = consultar_dados_ixc(cpf, remoteJid)
+    return dados.get('cadastro', dados)
+
+def consultar_valor_plano_ixc(cpf, remoteJid=None):
+    if remoteJid:
+        cache = buscar_ixc_redis(remoteJid, cpf)
+        if cache and 'valor_plano' in cache:
+            print(f"[LOG] Usando valor_plano do cache IXC para CPF {cpf}")
+            return cache['valor_plano']
+    dados = consultar_dados_ixc(cpf, remoteJid)
+    return dados.get('valor_plano', dados)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
