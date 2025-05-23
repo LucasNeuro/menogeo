@@ -189,9 +189,9 @@ def webhook():
         messages = [{"role": "system", "content": PROMPT}]
         # Ajuste: converter histórico para formato correto
         if historico and isinstance(historico, dict) and "results" in historico:
-            messages.extend(mem0_to_mistral_messages(historico["results"]))
+            messages.extend([m for m in mem0_to_mistral_messages(historico["results"]) if m.get("role") in ("user", "assistant")])
         elif historico and isinstance(historico, list):
-            messages.extend(mem0_to_mistral_messages(historico))
+            messages.extend([m for m in mem0_to_mistral_messages(historico) if m.get("role") in ("user", "assistant")])
         messages.append({"role": "user", "content": user_message})
         print("\n[LOG] Enviando para Mistral:")
         pprint.pprint(messages)
@@ -225,7 +225,7 @@ def webhook():
                 else:
                     tool_result = {"erro": "Tool não implementada"}
                 print("[LOG] Resultado da tool:", tool_result)
-                # Adiciona o resultado da tool apenas ao contexto da conversa
+                # Adiciona o resultado da tool apenas ao contexto da conversa (NÃO salva no Mem0AI)
                 messages.append({
                     "role": "tool",
                     "name": tool_name,
@@ -409,8 +409,10 @@ def is_cpf(text):
     return isinstance(text, str) and text.isdigit() and len(text) == 11
 
 def salvar_historico_mem0(remoteJid, cpf, mensagem):
-    user_id = f"{remoteJid}:{cpf}"
-    mem0_client.add([mensagem], user_id=user_id, agent_id="geovana")
+    # Só salva se for user ou assistant
+    if mensagem.get("role") in ("user", "assistant"):
+        user_id = f"{remoteJid}:{cpf}"
+        mem0_client.add([mensagem], user_id=user_id, agent_id="geovana")
 
 def buscar_historico_mem0(remoteJid, cpf, page=1, page_size=50):
     user_id = f"{remoteJid}:{cpf}"
