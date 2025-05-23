@@ -35,6 +35,8 @@ console = Console(
 PROMPT = (
     "Você é Geovana, agente virtual oficial da G4 Telecom.\n"
     "- Sempre que receber um CPF do usuário, chame imediatamente a função consultar_dados_ixc passando o CPF.\n"
+    "- Se já souber o CPF do usuário (salvo no contexto), use esse CPF automaticamente nas funções, sem pedir novamente.\n"
+    "- Só peça o CPF se não houver no contexto.\n"
     "- Use SEMPRE os dados retornados do IXC para responder conforme a intenção do usuário, buscando nos campos do JSON: cliente, boletos, contratos, login, OS.\n"
     "- Identifique as intenções do usuário (consulta_boleto, consulta_status_plano, estou_sem_internet, consulta_dados_cadastro, consulta_valor_plano, etc.) e responda de acordo, usando os dados reais do IXC.\n"
     "- Personalize as respostas usando o nome do cliente, status do contrato, valores, datas, etc.\n"
@@ -246,7 +248,7 @@ def webhook():
                     print("[LOG] Tool call recebida:", tool_call)
                     tool_name = tool_call["function"]["name"]
                     args = json.loads(tool_call["function"]["arguments"])
-                    # Se a tool_call precisa de CPF e não foi informado, usa o do contexto
+                    # Sempre injeta o CPF do contexto se não informado
                     if "cpf" in args and (not args["cpf"] or not is_cpf(args["cpf"])):
                         if cpf_contexto:
                             args["cpf"] = cpf_contexto
