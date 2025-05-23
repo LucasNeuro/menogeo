@@ -179,7 +179,10 @@ def webhook():
         historico = buscar_historico_mem0(remote_jid, phone)
         # Montar contexto para o Mistral
         messages = [{"role": "system", "content": PROMPT}]
-        if historico:
+        # Ajuste: garantir que só mensagens válidas vão para o Mistral
+        if historico and isinstance(historico, dict) and "results" in historico:
+            messages.extend(historico["results"])
+        elif historico and isinstance(historico, list):
             messages.extend(historico)
         messages.append({"role": "user", "content": user_message})
         print("\n[LOG] Enviando para Mistral:")
