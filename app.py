@@ -18,7 +18,9 @@ load_dotenv()
 MEGAAPI_URL = os.getenv("MEGAAPI_URL")
 MEGAAPI_KEY = os.getenv("MEGAAPI_KEY")
 INSTANCE_KEY = os.getenv("INSTANCE_KEY")
-
+# DeepSeek credentials
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_URL = os.getenv("DEEPSEEK_URL")
 # Mistral credentials
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 MISTRAL_AGENT_ID = os.getenv("MISTRAL_AGENT_ID")
@@ -191,6 +193,59 @@ def processar_mensagem_usuario(remoteJid, message, messages, logs=None):
         return True
     return False
 
+# --- Micro agente de intenção usando DeepSeek ---
+
+def detect_intent_deepseek(msg):
+    if not DEEPSEEK_API_KEY or not DEEPSEEK_URL:
+        raise RuntimeError("DEEPSEEK_API_KEY ou DEEPSEEK_URL não definida no ambiente!")
+    prompt = (
+        "Você é um classificador de intenções para atendimento de provedores de internet. "
+        "Dada a mensagem do usuário, responda apenas com a intenção principal entre: "
+        "consulta_boleto, consulta_status_plano, estou_sem_internet, consulta_dados_cadastro, consulta_valor_plano, abrir_os, transferir_para_humano, cumprimento, outra.\n"
+        f"Mensagem: '{msg}'\nResponda apenas com a intenção."
+    )
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": "Classifique a intenção da mensagem."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 10,
+        "temperature": 0.0
+    }
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    try:
+        response = requests.post(DEEPSEEK_URL, headers=headers, json=payload, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        intent = result["choices"][0]["message"]["content"].strip().lower()
+        # Normaliza possíveis variações
+        if "boleto" in intent:
+            return "boleto"
+        if "status" in intent:
+            return "status"
+        if "cadastro" in intent:
+            return "cadastro"
+        if "valor" in intent:
+            return "valor_plano"
+        if "abrir_os" in intent or "ordem" in intent:
+            return "abrir_os"
+        if "humano" in intent or "atendente" in intent:
+            return "transferir_para_humano"
+        if "cumpriment" in intent:
+            return "cumprimento"
+        if "internet" in intent:
+            return "estou_sem_internet"
+        if "outra" in intent:
+            return None
+        return intent
+    except Exception as e:
+        print(f"[DeepSeek][ERRO] Falha ao classificar intenção: {str(e)}")
+        return None
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -220,6 +275,32 @@ def webhook():
             console.log(f"[red]Payload inesperado ou número inválido: {data}")
             return jsonify({"error": "Payload inesperado ou número inválido", "payload": data}), 400
 
+        intencao = detect_intent_deepseek(user_message)
+        # Flag de cumprimento no Redis
+        cumprimentou_key = f"conversa:{remote_jid}:cumprimentou"
+        cumprimentou = redis_client.get(cumprimentou_key)
+        # Se for só cumprimento, responde apenas com cumprimento cordial
+        if intencao == "cumprimento":
+            nome_cliente = None
+            dados_ixc = None
+            cpf_contexto = get_cpf_from_context(remote_jid)
+            if cpf_contexto:
+                dados_ixc = buscar_ixc_redis(remote_jid, cpf_contexto)
+                if dados_ixc and 'cliente' in dados_ixc:
+                    nome_cliente = dados_ixc['cliente'].get('razao_social') or dados_ixc['cliente'].get('nome')
+            if not cumprimentou:
+                resposta = f"Olá, {nome_cliente}! Como posso ajudar?" if nome_cliente else "Olá! Como posso ajudar?"
+                redis_client.setex(cumprimentou_key, 3600, "1")
+            else:
+                resposta = "Como posso ajudar?"
+            send_whatsapp_message(phone, resposta)
+            return jsonify({"status": "cumprimento"})
+        # Se não for intenção clara, responde pedindo para o usuário explicar o que deseja
+        if not intencao:
+            resposta = "Por favor, me diga como posso te ajudar (ex: boleto, status do plano, cadastro, etc)."
+            send_whatsapp_message(phone, resposta)
+            return jsonify({"status": "aguardando_intencao"})
+        # Se for intenção sensível, segue fluxo normal (CPF/contexto, etc)
         # Se o usuário informar um CPF válido, consultar e salvar dados do IXC
         if is_cpf(user_message):
             salvar_cpf_contexto(remote_jid, user_message)
