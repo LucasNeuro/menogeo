@@ -246,6 +246,8 @@ def setar_cumprimento_cliente(remoteJid):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    intencao = None  # valor padrão
+    entidades = {}
     try:
         data = request.json
         logs = []
