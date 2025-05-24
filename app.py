@@ -443,44 +443,68 @@ def webhook():
             console.log(f"[LOG] Mensagem enviada para WhatsApp (regra de negócio): {resposta_antecipada}")
             return jsonify({"status": "regra_negocio", "mensagem": resposta_antecipada})
 
-        result = call_mistral(messages, tools)
-        print("[LOG] Resposta do Mistral:")
-        pprint.pprint(result)
-        console.log(f"[LOG] Resposta do Mistral recebida: {result}")
-        final_response = None
-        if result and "choices" in result and result["choices"]:
-            final_response = result["choices"][0]["message"]["content"]
-        # Pós-processamento: garantir sugestão de próximos passos
-        if final_response:
-            # Validação: garantir que nome/boletos apresentados batem com o contexto do Redis/IXC
-            if nome_cliente and nome_cliente not in final_response:
-                final_response = f"Olá, {nome_cliente}!\n" + final_response
-            # (Opcional) Validar se o link do boleto é do IXC
-            if dados_ixc and 'boletos' in dados_ixc and dados_ixc['boletos']:
-                url_pdf = dados_ixc['boletos'][0].get('url_pdf')
-                if url_pdf and url_pdf not in final_response:
-                    final_response += f"\nSegue o link para pagamento: {url_pdf}"
-            sugestao = None
-            if nome_cliente:
-                sugestao = f"\n\nPosso te ajudar com mais alguma coisa, {nome_cliente}?"
-            else:
-                sugestao = "\n\nPosso te ajudar com mais alguma coisa?"
-            # Só adiciona sugestão se não houver algo similar já na resposta
-            if sugestao.strip().lower() not in final_response.strip().lower():
-                final_response = final_response.strip() + sugestao
-
-        # Cumprimento só uma vez por conversa
+        # --- CICLO ROBUSTO DE TOOL_CALLS ---
+        max_tool_calls = 5
+        tool_call_count = 0
+        resposta_final = None
+        while True:
+            result = call_mistral(messages, tools)
+            print("[LOG] Resposta do Mistral:")
+            pprint.pprint(result)
+            console.log(f"[LOG] Resposta do Mistral recebida: {result}")
+            if not result or "choices" not in result or not result["choices"]:
+                break
+            msg = result["choices"][0]["message"]
+            # Se houver tool_calls, executa e adiciona ao contexto
+            if msg.get("tool_calls"):
+                for tool_call in msg["tool_calls"]:
+                    tool_name = tool_call["function"]["name"]
+                    tool_args = json.loads(tool_call["function"]["arguments"])
+                    print(f"[LOG] Tool call recebida: {tool_name} | Args: {tool_args}")
+                    # Executa a tool
+                    if tool_name == "consultar_dados_ixc":
+                        tool_result = consultar_dados_ixc(**tool_args)
+                    elif tool_name == "consultar_boletos":
+                        tool_result = consultar_boletos_ixc(**tool_args)
+                    elif tool_name == "consultar_status_plano":
+                        tool_result = consultar_status_plano_ixc(**tool_args)
+                    elif tool_name == "consultar_dados_cadastro":
+                        tool_result = consultar_dados_cadastro_ixc(**tool_args)
+                    elif tool_name == "consultar_valor_plano":
+                        tool_result = consultar_valor_plano_ixc(**tool_args)
+                    elif tool_name == "abrir_os":
+                        tool_result = abrir_os(**tool_args)
+                    elif tool_name == "transferir_para_humano":
+                        tool_result = transferir_para_humano(**tool_args)
+                    else:
+                        tool_result = {"erro": f"Tool {tool_name} não implementada"}
+                    print("[LOG] Resultado da tool:", tool_result)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "name": tool_name,
+                        "content": json.dumps(tool_result, ensure_ascii=False)
+                    })
+                tool_call_count += 1
+                if tool_call_count >= max_tool_calls:
+                    print("[LOG][ERRO] Excesso de tool_calls, encerrando ciclo para evitar loop infinito.")
+                    break
+                continue  # Chama o Mistral novamente com o novo contexto
+            # Se não houver tool_calls, pega a resposta final
+            resposta_final = msg.get("content", "")
+            # Ignora mensagens de transição
+            if resposta_final.strip().lower() in ["estou buscando seus dados...", "aguarde...", "buscando informações..."]:
+                print("[LOG] Ignorando mensagem de transição, aguardando resposta final.")
+                continue
+            break  # Sai do loop quando tiver resposta final útil
+        # Cumprimento cordial na primeira resposta útil
         cumprimentou = cumprimentou_cliente(remote_jid)
-        resposta_final = final_response or ""
         if not cumprimentou and nome_cliente and resposta_final:
-            # Garante cumprimento no início
             if not resposta_final.lower().startswith(f"olá, {nome_cliente.lower()}"):
                 resposta_final = f"Olá, {nome_cliente}!\n" + resposta_final.lstrip()
             setar_cumprimento_cliente(remote_jid)
-        # Se já cumprimentou, remove cumprimentos duplicados
         elif cumprimentou and nome_cliente:
-            resposta_final = re.sub(r"olá,?\s*" + re.escape(nome_cliente) + r"[!,.\s]*", "", resposta_final, flags=re.IGNORECASE)
-        # Pós-processamento extra: limpeza da resposta
+            resposta_final = re.sub(r"olá,?\s*" + re.escape(nome_cliente) + r"[!,\.\s]*", "", resposta_final, flags=re.IGNORECASE)
         resposta_final = limpar_resposta(resposta_final, nome_cliente, intencao)
         if resposta_final:
             send_whatsapp_message(phone, resposta_final)
