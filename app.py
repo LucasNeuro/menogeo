@@ -394,6 +394,11 @@ def webhook():
         print(f"[DeepSeek][MICROAGENTE] Mensagem: {user_message}")
         print(f"[DeepSeek][MICROAGENTE] Intenção detectada: {intencao}")
         print(f"[DeepSeek][MICROAGENTE] Entidades extraídas: {entidades}")
+        # Adiciona intenção detectada explicitamente ao contexto do Mistral
+        messages.append({
+            "role": "system",
+            "content": f"A intenção detectada é: {intencao}. Entidades: {json.dumps(entidades, ensure_ascii=False)}"
+        })
         # Se for saudação, elogio ou despedida, responder cordialmente
         if intencao in ["saudacao", "elogio", "despedida"]:
             resposta = "Olá! Como posso te ajudar hoje?"
@@ -412,14 +417,12 @@ def webhook():
         # Checagens antes de chamar o Mistral
         resposta_antecipada = None
         if intencao == "consulta_boleto":
-            # Exemplo: só mostra boletos se contrato ativo
             status_contrato = None
             if dados_ixc and 'contrato' in dados_ixc:
                 status_contrato = dados_ixc['contrato'].get('status')
             if status_contrato and status_contrato.lower() != 'ativo':
                 resposta_antecipada = f"Seu contrato está '{status_contrato}'. Não é possível exibir boletos. Por favor, regularize sua situação ou fale com um atendente."
         elif intencao == "estou_sem_internet":
-            # Exemplo: se contrato bloqueado, orientar ou transferir
             status_contrato = None
             status_internet = None
             if dados_ixc and 'contrato' in dados_ixc:
@@ -430,7 +433,6 @@ def webhook():
             elif status_internet and status_internet.lower() != 'ativo':
                 resposta_antecipada = f"Sua internet está '{status_internet}'. Recomendo falar com o suporte."
         elif intencao == "consulta_valor_plano":
-            # Exemplo: só mostra valor se contrato ativo
             status_contrato = None
             if dados_ixc and 'contrato' in dados_ixc:
                 status_contrato = dados_ixc['contrato'].get('status')
@@ -447,8 +449,9 @@ def webhook():
         max_tool_calls = 5
         tool_call_count = 0
         resposta_final = None
+        mistral_messages = messages.copy()
         while True:
-            result = call_mistral(messages, tools)
+            result = call_mistral(mistral_messages, tools)
             print("[LOG] Resposta do Mistral:")
             pprint.pprint(result)
             console.log(f"[LOG] Resposta do Mistral recebida: {result}")
@@ -460,6 +463,9 @@ def webhook():
                 for tool_call in msg["tool_calls"]:
                     tool_name = tool_call["function"]["name"]
                     tool_args = json.loads(tool_call["function"]["arguments"])
+                    # Garante que o CPF passado é sempre o do contexto
+                    if "cpf" in tool_args:
+                        tool_args["cpf"] = cpf_contexto
                     print(f"[LOG] Tool call recebida: {tool_name} | Args: {tool_args}")
                     # Executa a tool
                     if tool_name == "consultar_dados_ixc":
@@ -479,7 +485,13 @@ def webhook():
                     else:
                         tool_result = {"erro": f"Tool {tool_name} não implementada"}
                     print("[LOG] Resultado da tool:", tool_result)
-                    messages.append({
+                    mistral_messages.append({
+                        "role": "assistant",
+                        "tool_call_id": tool_call["id"],
+                        "content": "",
+                        "tool_calls": [tool_call]
+                    })
+                    mistral_messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call["id"],
                         "name": tool_name,
